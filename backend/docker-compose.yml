@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: hellas_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: hellas_user
+      POSTGRES_PASSWORD: changeme
+      POSTGRES_DB: hellas_hotel
+    ports:
+      - "5432:5432"
+    volumes:
+      - hellas_pgdata:/var/lib/postgresql/data
+
+volumes:
+  hellas_pgdata:
