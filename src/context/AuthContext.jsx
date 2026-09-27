@@ -1,94 +1,65 @@
-import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from "react";
-import { supabase } from "../lib/supabaseClient.js";
-import { fetchProfile, signIn, signOut } from "../services/auth.js";
+import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
+import { api, setToken } from "../lib/apiClient.js";
 
 const AuthContext = createContext(null);
 
-/**
- * Session Supabase + profil applicatif. Un utilisateur authentifié mais sans
- * profil, ou dont le profil est désactivé, est déconnecté avec un message
- * explicite (auparavant il revenait silencieusement à l'écran de connexion).
- */
 export function AuthProvider({ children }) {
-  const [session, setSession] = useState(null);
-  const [profile, setProfile] = useState(null);
+  const [user, setUser]       = useState(null);   // { id, email, role, nom, prenoms, actif }
   const [loading, setLoading] = useState(true);
-  const [authError, setAuthError] = useState("");
-  const loadedFor = useRef(null);
 
-  const loadProfile = useCallback(async (userId) => {
+  // Vérifie le token stocké au démarrage
+  const checkStoredSession = useCallback(async () => {
+    const token = localStorage.getItem("hellas-token");
+    if (!token) { setLoading(false); return; }
     try {
-      const p = await fetchProfile(userId);
-      if (!p) {
-        setAuthError("Ce compte n'a pas de profil dans l'application. Contactez un administrateur.");
-        setProfile(null);
-        await supabase.auth.signOut();
-        return;
-      }
-      if (!p.actif) {
-        setAuthError("Ce compte est désactivé ou en attente d'activation par un administrateur.");
-        setProfile(null);
-        await supabase.auth.signOut();
-        return;
-      }
-      setAuthError("");
-      setProfile(p);
-    } catch (err) {
-      setAuthError(err.message || "Impossible de charger votre profil.");
-      setProfile(null);
+      const data = await api.get("/auth/me");
+      setUser(data.user);
+    } catch {
+      // Token expiré ou invalide → on le supprime
+      setToken(null);
+      setUser(null);
+    } finally {
+      setLoading(false);
     }
   }, []);
 
-  useEffect(() => {
-    // onAuthStateChange émet INITIAL_SESSION au démarrage : une seule source.
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
-      setSession(newSession);
-      const uid = newSession?.user?.id ?? null;
-      if (!uid) {
-        loadedFor.current = null;
-        setProfile(null);
-        setLoading(false);
-        return;
-      }
-      if (loadedFor.current === uid) {
-        setLoading(false);
-        return;
-      }
-      loadedFor.current = uid;
-      // Hors du callback : Supabase déconseille d'y attendre d'autres appels.
-      setTimeout(() => {
-        loadProfile(uid).finally(() => setLoading(false));
-      }, 0);
-    });
-    return () => sub.subscription.unsubscribe();
-  }, [loadProfile]);
+  useEffect(() => { checkStoredSession(); }, [checkStoredSession]);
 
   const login = async (email, password) => {
-    setAuthError("");
-    setLoading(true);
-    try {
-      await signIn(email, password);
-    } catch (err) {
-      setLoading(false);
-      throw err;
-    }
+    const data = await api.post("/auth/login", { email, password });
+    setToken(data.token);
+    setUser(data.user);
+    return data;
   };
 
-  const logout = async () => {
-    await signOut();
-    loadedFor.current = null;
-    setProfile(null);
-    setSession(null);
+  const register = async (email, password, fullName) => {
+    const data = await api.post("/auth/register", { email, password, full_name: fullName });
+    return data;
   };
+
+  const logout = () => {
+    setToken(null);
+    setUser(null);
+  };
+
+  const refreshProfile = useCallback(async () => {
+    try {
+      const data = await api.get("/auth/me");
+      setUser(data.user);
+    } catch {
+      logout();
+    }
+  }, []);
 
   const value = {
-    session,
-    user: session?.user || null,
-    profile,
+    user,
+    profile: user,          // alias pour compatibilité avec les composants existants
+    session: user ? { user } : null,
     loading,
-    authError,
     login,
+    register,
     logout,
+    refreshProfile,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

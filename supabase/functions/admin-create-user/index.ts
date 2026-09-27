@@ -9,7 +9,23 @@
 import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
 import { supabaseAdmin, supabaseAsCaller } from "../_shared/supabaseAdmin.ts";
 
-const ROLES = ["admin", "gerant", "reception", "entretien"];
+type Role = "admin" | "gerant" | "reception" | "entretien";
+
+interface AdminCreateUserBody {
+  nom: string;
+  prenoms: string;
+  email: string;
+  telephone?: string | null;
+  role: Role;
+  password: string;
+}
+
+interface UserProfile {
+  role: string;
+  actif: boolean;
+}
+
+const ROLES: Role[] = ["admin", "gerant", "reception", "entretien"];
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
