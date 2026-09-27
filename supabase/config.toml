@@ -1,0 +1,15 @@
+# Configuration Supabase CLI (facultative, utile en local avec `supabase start`).
+# En production (Supabase hébergé), le déploiement des fonctions et le
+# --no-verify-jwt de cron-alerts se font via les commandes listées dans
+# supabase/README.md.
+
+project_id = "geshellas"
+
+[functions.notify]
+verify_jwt = true
+
+[functions."admin-create-user"]
+verify_jwt = true
+
+[functions."cron-alerts"]
+verify_jwt = false
