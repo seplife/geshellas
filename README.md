@@ -43,13 +43,21 @@ se déploie donc directement sur GitHub Pages via
 | Rôle | Accès |
 |---|---|
 | `admin` | Tout, y compris gestion des utilisateurs et paramètres |
-| `gerant` | Tableau de bord, chambres, clients, paiements, notifications |
+| `gerant` | Tableau de bord, chambres, réservations, clients, paiements, notifications (lecture ; relance des notifications) |
 | `reception` | Tableau de bord, chambres, clients, réservations, paiements |
-| `entretien` | Tableau de bord, chambres (nettoyage / anomalies) |
+| `entretien` | Tableau de bord (sans données financières), chambres (nettoyage / anomalies) |
 
 Ces règles sont appliquées **côté base de données** (RLS + fonctions
 `SECURITY DEFINER`), pas seulement dans l'interface : un appel API direct
 avec un compte non autorisé est rejeté par Postgres lui-même.
+
+## Dépannage
+
+**« Could not find the function public.get_dashboard without parameters in the
+schema cache »** : les scripts SQL n'ont pas été (entièrement) appliqués.
+Exécutez `supabase/migrations/0001_init.sql` puis `0002_corrections.sql` dans
+l'éditeur SQL Supabase — voir [`supabase/README.md`](./supabase/README.md#dépannage--could-not-find-the-function-publicget_dashboard-without-parameters-in-the-schema-cache).
+L'application affiche désormais ce diagnostic directement à l'écran.
 
 ## Structure du dépôt
 

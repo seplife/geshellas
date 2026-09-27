@@ -1,50 +1,82 @@
-import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from "react";
 import { supabase } from "../lib/supabaseClient.js";
 import { fetchProfile, signIn, signOut } from "../services/auth.js";
 
 const AuthContext = createContext(null);
 
+/**
+ * Session Supabase + profil applicatif. Un utilisateur authentifié mais sans
+ * profil, ou dont le profil est désactivé, est déconnecté avec un message
+ * explicite (auparavant il revenait silencieusement à l'écran de connexion).
+ */
 export function AuthProvider({ children }) {
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState("");
+  const loadedFor = useRef(null);
 
   const loadProfile = useCallback(async (userId) => {
     try {
       const p = await fetchProfile(userId);
+      if (!p) {
+        setAuthError("Ce compte n'a pas de profil dans l'application. Contactez un administrateur.");
+        setProfile(null);
+        await supabase.auth.signOut();
+        return;
+      }
+      if (!p.actif) {
+        setAuthError("Ce compte est désactivé ou en attente d'activation par un administrateur.");
+        setProfile(null);
+        await supabase.auth.signOut();
+        return;
+      }
+      setAuthError("");
       setProfile(p);
-    } catch {
+    } catch (err) {
+      setAuthError(err.message || "Impossible de charger votre profil.");
       setProfile(null);
     }
   }, []);
 
   useEffect(() => {
-    let active = true;
-    supabase.auth.getSession().then(({ data }) => {
-      if (!active) return;
-      setSession(data.session);
-      if (data.session) loadProfile(data.session.user.id).finally(() => setLoading(false));
-      else setLoading(false);
-    });
-
+    // onAuthStateChange émet INITIAL_SESSION au démarrage : une seule source.
     const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
       setSession(newSession);
-      if (newSession) loadProfile(newSession.user.id);
-      else setProfile(null);
+      const uid = newSession?.user?.id ?? null;
+      if (!uid) {
+        loadedFor.current = null;
+        setProfile(null);
+        setLoading(false);
+        return;
+      }
+      if (loadedFor.current === uid) {
+        setLoading(false);
+        return;
+      }
+      loadedFor.current = uid;
+      // Hors du callback : Supabase déconseille d'y attendre d'autres appels.
+      setTimeout(() => {
+        loadProfile(uid).finally(() => setLoading(false));
+      }, 0);
     });
-
-    return () => {
-      active = false;
-      sub.subscription.unsubscribe();
-    };
+    return () => sub.subscription.unsubscribe();
   }, [loadProfile]);
 
   const login = async (email, password) => {
-    await signIn(email, password);
+    setAuthError("");
+    setLoading(true);
+    try {
+      await signIn(email, password);
+    } catch (err) {
+      setLoading(false);
+      throw err;
+    }
   };
 
   const logout = async () => {
     await signOut();
+    loadedFor.current = null;
     setProfile(null);
     setSession(null);
   };
@@ -54,9 +86,9 @@ export function AuthProvider({ children }) {
     user: session?.user || null,
     profile,
     loading,
+    authError,
     login,
     logout,
-    refreshProfile: () => session && loadProfile(session.user.id),
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

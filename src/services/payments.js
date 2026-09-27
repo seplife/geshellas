@@ -1,17 +1,26 @@
-import { supabase, friendlyError } from "../lib/supabaseClient.js";
+import { supabase, raise } from "../lib/supabaseClient.js";
 
-export async function listPayments() {
-  const { data, error } = await supabase
+/** Paiements depuis une date (ISO) — séjours ET avances de réservation. */
+export async function listPayments({ since } = {}) {
+  let query = supabase
     .from("paiements")
-    .select("*, sejours:sejour_id(numero, chambre_id, chambres:chambre_id(numero), clients:client_id(nom, prenoms))")
-    .order("date_paiement", { ascending: false });
-  if (error) throw new Error(friendlyError(error));
+    .select(
+      "*, sejours:sejour_id(numero, chambres:chambre_id(numero), clients:client_id(nom, prenoms)), " +
+        "reservations:reservation_id(nom_client, chambres:chambre_id(numero))"
+    )
+    .order("date_paiement", { ascending: false })
+    .limit(1000);
+  if (since) query = query.gte("date_paiement", since);
+  const { data, error } = await query;
+  if (error) raise(error);
   return data.map((p) => ({
     ...p,
     sejour_numero: p.sejours?.numero,
-    chambre_numero: p.sejours?.chambres?.numero,
-    client_nom: p.sejours?.clients?.nom,
-    client_prenoms: p.sejours?.clients?.prenoms,
+    chambre_numero: p.sejours?.chambres?.numero ?? p.reservations?.chambres?.numero,
+    client_label: p.sejours?.clients
+      ? `${p.sejours.clients.nom} ${p.sejours.clients.prenoms}`
+      : p.reservations?.nom_client || null,
+    origine: p.sejour_id ? "Séjour" : p.reservation_id ? "Réservation" : "—",
   }));
 }
 
@@ -22,6 +31,6 @@ export async function recordPayment(payload) {
     p_mode_paiement: payload.mode_paiement,
     p_reference: payload.reference || null,
   });
-  if (error) throw new Error(friendlyError(error));
+  if (error) raise(error);
   return data;
 }

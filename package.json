@@ -1,6 +1,6 @@
 {
   "name": "hellas-hotel-manager",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
   "type": "module",
   "description": "Hellas Hôtel Manager — gestion hôtelière (Divo, Côte d'Ivoire), propulsée par Supabase.",
@@ -8,14 +8,17 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "lint": "eslint . --ext js,jsx --max-warnings 0"
+    "lint": "eslint . --ext js,jsx --max-warnings 0",
+    "test:db": "node supabase/tests/db.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",
+    "lucide-react": "^0.460.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@vitejs/plugin-react": "^4.3.1",
     "autoprefixer": "^10.4.19",
     "eslint": "^8.57.0",

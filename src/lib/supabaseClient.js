@@ -1,16 +1,15 @@
 import { createClient } from "@supabase/supabase-js";
 
-const url = "https://jyrlfxrsdloizrfgaunc.supabase.co";
-const anonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp5cmxmeHJzZGxvaXpyZmdhdW5jIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY0ODE1ODEsImV4cCI6MjEwMjA1NzU4MX0.ckJKRUbI08k_oaonBZjBPXUQOyfWGekAVafFcQBg-58";
+// Valeurs publiques du projet de production. La clé « anon » est publique par
+// conception (la sécurité repose sur RLS et les fonctions SECURITY DEFINER) ;
+// elle sert de repli si les variables d'environnement ne sont pas fournies au
+// build (ex. secrets GitHub Actions non configurés).
+const DEFAULT_URL = "https://jyrlfxrsdloizrfgaunc.supabase.co";
+const DEFAULT_ANON_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp5cmxmeHJzZGxvaXpyZmdhdW5jIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY0ODE1ODEsImV4cCI6MjEwMjA1NzU4MX0.ckJKRUbI08k_oaonBZjBPXUQOyfWGekAVafFcQBg-58";
 
-if (!url || !anonKey) {
-  // Erreur volontairement bruyante : sans ces deux variables, rien ne peut
-  // fonctionner (auth, données, edge functions).
-  console.error(
-    "VITE_SUPABASE_URL et/ou VITE_SUPABASE_ANON_KEY sont manquants. " +
-      "Copiez .env.example vers .env.local et renseignez les valeurs de votre projet Supabase."
-  );
-}
+const url = import.meta.env.VITE_SUPABASE_URL || DEFAULT_URL;
+const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || DEFAULT_ANON_KEY;
 
 export const supabase = createClient(url, anonKey, {
   auth: {
@@ -21,17 +20,37 @@ export const supabase = createClient(url, anonKey, {
 });
 
 /**
- * Traduit les erreurs Supabase/Postgres les plus courantes en messages
- * compréhensibles côté écran, sans exposer de détails techniques.
+ * Traduit les erreurs Supabase / PostgREST / Postgres en messages clairs, sans
+ * exposer de détails techniques inutiles au personnel.
  */
 export function friendlyError(error) {
   if (!error) return "Une erreur est survenue.";
   const msg = error.message || String(error);
-  if (msg.includes("Failed to fetch") || msg.includes("NetworkError")) {
-    return "Impossible de joindre Supabase. Vérifiez votre connexion internet.";
+  const code = error.code || "";
+
+  if (code === "PGRST202" || /schema cache/i.test(msg)) {
+    return (
+      "La base de données n'est pas à jour : une fonction attendue est introuvable. " +
+      "Un administrateur doit exécuter les scripts supabase/migrations (0001 puis 0002) dans l'éditeur SQL Supabase."
+    );
   }
-  if (msg.includes("Invalid login credentials")) {
-    return "Identifiants invalides.";
+  if (msg.includes("Failed to fetch") || msg.includes("NetworkError") || msg.includes("Load failed")) {
+    return "Impossible de joindre le serveur. Vérifiez votre connexion internet.";
+  }
+  if (msg.includes("Invalid login credentials")) return "E-mail ou mot de passe incorrect.";
+  if (msg.includes("Email not confirmed")) return "Adresse e-mail non confirmée.";
+  if (code === "PGRST301" || /JWT expired/i.test(msg)) return "Votre session a expiré. Reconnectez-vous.";
+  if (code === "23505") return "Cet élément existe déjà (doublon).";
+  if (code === "42501" && /permission denied/i.test(msg)) return "Action non autorisée pour votre compte.";
+  if (/FunctionsFetchError|Failed to send a request to the Edge Function/i.test(msg)) {
+    return "Service de notification indisponible (Edge Function non déployée ?).";
   }
   return msg;
+}
+
+/** Lève une Error lisible à partir d'une erreur Supabase. */
+export function raise(error) {
+  const e = new Error(friendlyError(error));
+  e.code = error?.code;
+  throw e;
 }
