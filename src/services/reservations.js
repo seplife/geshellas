@@ -1,12 +1,13 @@
-import { supabase, friendlyError } from "../lib/supabaseClient.js";
+import { supabase, raise } from "../lib/supabaseClient.js";
 
 export async function listReservations() {
   const { data, error } = await supabase
     .from("reservations")
-    .select("*, chambres:chambre_id(numero)")
-    .order("date_arrivee");
-  if (error) throw new Error(friendlyError(error));
-  return data.map((r) => ({ ...r, chambre_numero: r.chambres?.numero }));
+    .select("*, chambres:chambre_id(numero, type, prix_nuit, capacite)")
+    .order("date_arrivee")
+    .limit(500);
+  if (error) raise(error);
+  return data.map((r) => ({ ...r, chambre_numero: r.chambres?.numero, chambre: r.chambres }));
 }
 
 export async function createReservation(payload) {
@@ -18,12 +19,18 @@ export async function createReservation(payload) {
     p_date_depart: payload.date_depart,
     p_montant: payload.montant,
     p_avance: payload.avance,
+    p_mode_paiement: payload.mode_paiement,
   });
-  if (error) throw new Error(friendlyError(error));
+  if (error) raise(error);
   return data;
 }
 
 export async function cancelReservation(id) {
   const { error } = await supabase.rpc("cancel_reservation", { p_reservation_id: id });
-  if (error) throw new Error(friendlyError(error));
+  if (error) raise(error);
+}
+
+export async function markReservationAbsent(id) {
+  const { error } = await supabase.rpc("mark_reservation_absent", { p_reservation_id: id });
+  if (error) raise(error);
 }

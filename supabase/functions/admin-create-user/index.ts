@@ -36,8 +36,8 @@ Deno.serve(async (req) => {
     if (!ROLES.includes(body.role)) {
       return jsonResponse({ error: "Rôle invalide." }, 400);
     }
-    if (String(body.password).length < 6) {
-      return jsonResponse({ error: "Le mot de passe doit contenir au moins 6 caractères." }, 400);
+    if (String(body.password).length < 8) {
+      return jsonResponse({ error: "Le mot de passe doit contenir au moins 8 caractères." }, 400);
     }
 
     const { data: created, error: createErr } = await db.auth.admin.createUser({
@@ -48,10 +48,18 @@ Deno.serve(async (req) => {
         nom: body.nom,
         prenoms: body.prenoms,
         telephone: body.telephone || null,
-        role: body.role,
       },
+      // Le rôle est placé dans app_metadata (modifiable uniquement avec la clé
+      // service_role) : c'est la seule source lue par le trigger
+      // handle_new_user, ce qui empêche un visiteur de s'auto-attribuer un rôle.
+      app_metadata: { role: body.role },
     });
-    if (createErr) return jsonResponse({ error: createErr.message }, 400);
+    if (createErr) {
+      const msg = /already (been )?registered|already exists/i.test(createErr.message)
+        ? "Un compte existe déjà avec cette adresse e-mail."
+        : createErr.message;
+      return jsonResponse({ error: msg }, 400);
+    }
 
     return jsonResponse({
       id: created.user?.id,

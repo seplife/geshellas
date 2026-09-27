@@ -1,25 +1,28 @@
-import { supabase, friendlyError } from "../lib/supabaseClient.js";
+import { supabase, raise } from "../lib/supabaseClient.js";
 
 export async function listStays({ statut } = {}) {
   let query = supabase
     .from("sejours")
-    .select("*, clients:client_id(nom, prenoms, telephone), chambres:chambre_id(numero)")
+    .select("*, clients:client_id(nom, prenoms, telephone), chambres:chambre_id(numero, prix_nuit)")
     .order("created_at", { ascending: false });
   if (statut) query = query.eq("statut", statut);
   const { data, error } = await query;
-  if (error) throw new Error(friendlyError(error));
+  if (error) raise(error);
   return data.map((s) => ({
     ...s,
     client_nom: s.clients?.nom,
     client_prenoms: s.clients?.prenoms,
     client_telephone: s.clients?.telephone,
     chambre_numero: s.chambres?.numero,
+    prix_nuit: s.chambres?.prix_nuit,
   }));
 }
 
-/** Notifie le gérant en tâche de fond — un échec d'envoi n'affecte jamais l'opération déjà validée. */
+/** Notifie le gérant en tâche de fond — un échec d'envoi n'annule jamais l'opération validée. */
 function notifyInBackground(payload) {
-  supabase.functions.invoke("notify", { body: payload }).catch((e) => console.error("Notification échouée:", e));
+  supabase.functions
+    .invoke("notify", { body: payload })
+    .catch((e) => console.warn("Notification WhatsApp non envoyée :", e));
 }
 
 export async function checkIn(payload) {
@@ -33,8 +36,9 @@ export async function checkIn(payload) {
     p_nb_personnes: payload.nb_personnes,
     p_avance: payload.avance,
     p_mode_paiement: payload.mode_paiement,
+    p_reservation_id: payload.reservation_id ?? null,
   });
-  if (error) throw new Error(friendlyError(error));
+  if (error) raise(error);
   notifyInBackground({ action: "send", type: "check-in", sejour_id: data.sejour.id });
   return data;
 }
@@ -45,7 +49,7 @@ export async function checkOut(sejourId, payload) {
     p_montant_supplementaire: payload.montant_supplementaire,
     p_mode_paiement: payload.mode_paiement,
   });
-  if (error) throw new Error(friendlyError(error));
+  if (error) raise(error);
   notifyInBackground({ action: "send", type: "check-out", sejour_id: sejourId });
   return data.sejour;
 }
@@ -58,7 +62,7 @@ export async function extendStay(sejourId, payload) {
     p_paiement_supplementaire: payload.paiement_supplementaire,
     p_mode_paiement: payload.mode_paiement,
   });
-  if (error) throw new Error(friendlyError(error));
+  if (error) raise(error);
   notifyInBackground({
     action: "send",
     type: "prolongation",

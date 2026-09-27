@@ -7,7 +7,8 @@
 -- direct en écriture aux tables, il appelle uniquement des RPC contrôlées.
 --
 -- À exécuter dans l'éditeur SQL de votre projet Supabase (ou via
--- `supabase db push` si vous utilisez la CLI). Voir supabase/README.md.
+-- `supabase db push` si vous utilisez la CLI), PUIS 0002_corrections.sql.
+-- Ce script est relançable sans erreur. Voir supabase/README.md.
 -- ============================================================================
 
 create extension if not exists pgcrypto;
@@ -265,45 +266,64 @@ alter table public.historique_statuts_chambres enable row level security;
 alter table public.journal_activite enable row level security;
 alter table public.parametres enable row level security;
 
+drop policy if exists "profil: lecture de son propre profil" on public.profiles;
 create policy "profil: lecture de son propre profil" on public.profiles
   for select using (id = auth.uid());
 
+drop policy if exists "profil: admin lit tous les profils" on public.profiles;
 create policy "profil: admin lit tous les profils" on public.profiles
   for select using (public.current_role_actif() = 'admin');
 
+drop policy if exists "lecture authentifiée: chambres" on public.chambres;
 create policy "lecture authentifiée: chambres" on public.chambres
   for select using (public.current_role_actif() is not null);
 
+drop policy if exists "lecture authentifiée: clients" on public.clients;
 create policy "lecture authentifiée: clients" on public.clients
   for select using (public.current_role_actif() is not null);
 
+drop policy if exists "lecture authentifiée: sejours" on public.sejours;
 create policy "lecture authentifiée: sejours" on public.sejours
   for select using (public.current_role_actif() is not null);
 
+drop policy if exists "lecture authentifiée: reservations" on public.reservations;
 create policy "lecture authentifiée: reservations" on public.reservations
   for select using (public.current_role_actif() is not null);
 
+drop policy if exists "lecture authentifiée: paiements" on public.paiements;
 create policy "lecture authentifiée: paiements" on public.paiements
   for select using (public.current_role_actif() in ('admin', 'gerant', 'reception'));
 
+drop policy if exists "lecture authentifiée: notifications" on public.notifications;
 create policy "lecture authentifiée: notifications" on public.notifications
   for select using (public.current_role_actif() in ('admin', 'gerant'));
 
+drop policy if exists "lecture authentifiée: historique chambres" on public.historique_statuts_chambres;
 create policy "lecture authentifiée: historique chambres" on public.historique_statuts_chambres
   for select using (public.current_role_actif() = 'admin');
 
+drop policy if exists "lecture authentifiée: journal activite" on public.journal_activite;
 create policy "lecture authentifiée: journal activite" on public.journal_activite
   for select using (public.current_role_actif() = 'admin');
 
+drop policy if exists "lecture authentifiée: parametres" on public.parametres;
 create policy "lecture authentifiée: parametres" on public.parametres
   for select using (public.current_role_actif() = 'admin');
 
 -- Realtime : permet au frontend de s'abonner aux changements (chambres,
 -- séjours, notifications) pour un tableau de bord vraiment temps réel.
-alter publication supabase_realtime add table public.chambres;
-alter publication supabase_realtime add table public.sejours;
-alter publication supabase_realtime add table public.reservations;
-alter publication supabase_realtime add table public.notifications;
+do $$
+declare t text;
+begin
+  foreach t in array array['chambres', 'sejours', 'reservations', 'notifications'] loop
+    if not exists (
+      select 1 from pg_publication_tables
+      where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t
+    ) then
+      execute format('alter publication supabase_realtime add table public.%I', t);
+    end if;
+  end loop;
+end $$;
 
 -- ----------------------------------------------------------------------------
 -- 6. Fonctions métier (RPC)

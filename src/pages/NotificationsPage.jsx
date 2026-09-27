@@ -1,45 +1,68 @@
-import React from "react";
+import React, { useState } from "react";
+import { MessageSquare, RotateCw } from "lucide-react";
 import Button from "../components/ui/Button.jsx";
 import EmptyState from "../components/ui/EmptyState.jsx";
+import ErrorState from "../components/ui/ErrorState.jsx";
+import PageHeader from "../components/ui/PageHeader.jsx";
+import { Pill } from "../components/ui/Badge.jsx";
+import { Skeleton } from "../components/ui/Spinner.jsx";
+import { CAN } from "../constants.js";
 import { fmtDateTime } from "../lib/format.js";
 
-export default function NotificationsPage({ notifications, onRetry }) {
-  return (
-    <div className="flex flex-col gap-4 animate-fade-in">
-      <div>
-        <h1 className="text-2xl font-semibold text-brand-700 dark:text-brand-100">Notifications WhatsApp</h1>
-        <p className="text-sm text-stone-500 dark:text-stone-400">
-          Journal des envois au gérant, avec statut et relance en cas d'échec.
-        </p>
-      </div>
+const STATUT = {
+  envoyee: { label: "Envoyée", tone: "green" },
+  echec: { label: "Échec", tone: "red" },
+  en_attente: { label: "En attente", tone: "ochre" },
+};
 
-      {notifications.length === 0 ? (
-        <EmptyState title="Aucune notification pour le moment." />
+const TYPES = {
+  "check-in": "Arrivée",
+  "check-out": "Départ",
+  prolongation: "Prolongation",
+  "alerte-fin-sejour": "Fin de séjour proche",
+  "resume-journalier": "Résumé du jour",
+};
+
+export default function NotificationsPage({ notifications, error, onRetry, role, onResend }) {
+  const [filter, setFilter] = useState("tous");
+  const list = (notifications || []).filter((n) => filter === "tous" || n.statut === filter);
+  const failures = (notifications || []).filter((n) => n.statut === "echec").length;
+
+  return (
+    <div className="flex flex-col gap-5 animate-fade-in">
+      <PageHeader title="Notifications WhatsApp" subtitle="Messages envoyés au gérant, avec relance en cas d'échec." />
+      <div className="flex gap-2 flex-wrap">
+        {[["tous", "Toutes"], ["echec", `Échecs (${failures})`], ["envoyee", "Envoyées"]].map(([k, label]) => (
+          <button type="button" key={k} className={`chip ${filter === k ? "chip-active" : ""}`} onClick={() => setFilter(k)}>{label}</button>
+        ))}
+      </div>
+      {error && <ErrorState message={error} onRetry={onRetry} />}
+
+      {!notifications ? (
+        <div className="flex flex-col gap-3">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-28" />)}</div>
+      ) : list.length === 0 ? (
+        <EmptyState icon={MessageSquare} title="Aucune notification." />
       ) : (
-        <div className="flex flex-col gap-3">
-          {notifications.map((n) => {
-            const sent = n.statut === "envoyee";
+        <div className="grid lg:grid-cols-2 gap-3">
+          {list.map((n) => {
+            const st = STATUT[n.statut] || { label: n.statut, tone: "gray" };
             return (
-              <div
-                key={n.id}
-                className={`rounded-2xl p-4 border ${
-                  sent
-                    ? "bg-emerald-50 border-emerald-100 dark:bg-emerald-500/10 dark:border-emerald-500/20"
-                    : "bg-rose-50 border-rose-100 dark:bg-rose-500/10 dark:border-rose-500/20"
-                }`}
-              >
-                <div className="flex justify-between items-start mb-1.5 gap-2">
-                  <div className={`text-[11px] ${sent ? "text-emerald-700 dark:text-emerald-300" : "text-rose-700 dark:text-rose-300"}`}>
-                    {fmtDateTime(n.created_at)} · {n.type} · {n.statut}
+              <div key={n.id} className="card p-4 flex flex-col gap-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Pill tone={st.tone}>{st.label}</Pill>
+                    <span className="text-sm font-medium truncate">{TYPES[n.type] || n.type}</span>
                   </div>
-                  {n.statut === "echec" && (
-                    <Button variant="ghost" onClick={() => onRetry(n.id)}>
-                      Réessayer
-                    </Button>
+                  <span className="text-[11px] text-stone-500 whitespace-nowrap">{fmtDateTime(n.created_at)}</span>
+                </div>
+                <pre className="whitespace-pre-wrap text-[13px] font-sans text-stone-700 dark:text-stone-200 bg-stone-50 dark:bg-brand-900/50 rounded-xl p-3 max-h-48 overflow-y-auto">{n.message}</pre>
+                <div className="flex items-center justify-between gap-2 text-xs text-stone-500">
+                  <span>→ {n.destinataire} · {n.tentatives} tentative(s)</span>
+                  {n.statut === "echec" && CAN.retryNotification(role) && (
+                    <Button size="sm" variant="ghost" icon={RotateCw} onClick={() => onResend(n.id)}>Réessayer</Button>
                   )}
                 </div>
-                <pre className="whitespace-pre-wrap text-sm font-sans text-stone-700 dark:text-stone-200">{n.message}</pre>
-                {n.erreur && <div className="text-xs mt-1.5 text-rose-700 dark:text-rose-300">Erreur : {n.erreur}</div>}
+                {n.erreur && <div className="text-xs text-rose-600 dark:text-rose-300">Erreur : {n.erreur}</div>}
               </div>
             );
           })}

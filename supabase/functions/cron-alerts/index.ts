@@ -39,6 +39,10 @@ async function logAndSend(
 }
 
 async function runCheckoutAlerts(db: ReturnType<typeof supabaseAdmin>) {
+  // Aligne les statuts des chambres sur le calendrier des réservations
+  // (arrivées du jour → « réservée », réservations expirées → « client absent »).
+  await db.rpc("sync_reserved_rooms");
+
   const { data: sejours, error } = await db.rpc("get_upcoming_checkouts", { p_window_minutes: 30 });
   if (error) throw error;
   const to = await managerNumber(db);
@@ -87,8 +91,10 @@ async function runDailySummary(db: ReturnType<typeof supabaseAdmin>) {
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
+  // Le secret est obligatoire : sans lui, n'importe qui pourrait déclencher
+  // des envois WhatsApp (la fonction est déployée sans vérification JWT).
   const expectedSecret = Deno.env.get("CRON_SECRET");
-  if (expectedSecret && req.headers.get("x-cron-secret") !== expectedSecret) {
+  if (!expectedSecret || req.headers.get("x-cron-secret") !== expectedSecret) {
     return jsonResponse({ error: "Non autorisé." }, 401);
   }
 
