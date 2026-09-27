@@ -10,13 +10,12 @@
 //   { action: "send", type: "check-in"|"check-out"|"prolongation", sejour_id }
 //   { action: "retry", notification_id }
 //
-// Sécurité : la vérification du JWT utilisateur (verify_jwt) est activée par
-// défaut au déploiement — seul un utilisateur authentifié peut appeler cette
-// fonction. Le contrôle de rôle fin a déjà eu lieu dans la RPC Postgres
-// correspondante avant l'appel.
+// Sécurité : verify_jwt est activé au déploiement, ET la fonction vérifie
+// elle-même que l'appelant a un profil actif avec un rôle autorisé (sinon
+// n'importe quel compte, même désactivé, pourrait envoyer des WhatsApp).
 
 import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
-import { supabaseAdmin } from "../_shared/supabaseAdmin.ts";
+import { supabaseAdmin, supabaseAsCaller } from "../_shared/supabaseAdmin.ts";
 import {
   sendRaw,
   buildCheckInMessage,
@@ -67,8 +66,17 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const body = await req.json();
+    const caller = supabaseAsCaller(req.headers.get("Authorization"));
+    const { data: { user }, error: authErr } = await caller.auth.getUser();
+    if (authErr || !user) return jsonResponse({ error: "Authentification requise." }, 401);
+
     const db = supabaseAdmin();
+    const { data: profile } = await db.from("profiles").select("role, actif").eq("id", user.id).maybeSingle();
+    if (!profile?.actif) return jsonResponse({ error: "Compte désactivé." }, 403);
+
+    const body = await req.json();
+    const allowed = body.action === "retry" ? ["admin", "gerant"] : ["admin", "reception"];
+    if (!allowed.includes(profile.role)) return jsonResponse({ error: "Accès non autorisé pour ce rôle." }, 403);
 
     if (body.action === "retry") {
       const { data: n, error } = await db.from("notifications").select("*").eq("id", body.notification_id).single();

@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from "react";
+import { Moon, Sun } from "lucide-react";
 
 function getInitialTheme() {
   try {
     const stored = localStorage.getItem("hellas-theme");
     if (stored) return stored;
   } catch {
-    /* ignore */
+    /* stockage indisponible */
   }
   return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
@@ -18,18 +19,14 @@ export default function ThemeToggle({ className = "" }) {
     try {
       localStorage.setItem("hellas-theme", theme);
     } catch {
-      /* ignore */
+      /* stockage indisponible */
     }
   }, [theme]);
 
+  const label = theme === "dark" ? "Passer en thème clair" : "Passer en thème sombre";
   return (
-    <button
-      onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
-      className={`btn-icon ${className}`}
-      aria-label="Basculer le thème clair/sombre"
-      title="Basculer le thème clair/sombre"
-    >
-      {theme === "dark" ? "☀️" : "🌙"}
+    <button type="button" onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} className={`btn-icon ${className}`} aria-label={label} title={label}>
+      {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
     </button>
   );
 }

@@ -18,52 +18,62 @@ s'y connecte directement.
 
 ## 2. Appliquer le schéma
 
-Dans **SQL Editor** de votre projet Supabase, collez et exécutez, dans
-l'ordre :
+Dans **SQL Editor** de votre projet Supabase, collez et exécutez, **dans
+l'ordre** :
 
-1. Le contenu de `supabase/migrations/0001_init.sql`
-2. (Optionnel) Le contenu de `supabase/seed.sql` pour avoir quelques chambres
-   de démonstration.
+1. `supabase/migrations/0001_init.sql` — schéma, RLS, fonctions métier ;
+2. `supabase/migrations/0002_corrections.sql` — correctifs de sécurité et de
+   cohérence (**obligatoire** : le frontend actuel en dépend) ;
+3. (Optionnel) `supabase/seed.sql` pour quelques chambres de démonstration.
 
-> Si vous préférez la CLI Supabase (`npm i -g supabase`), vous pouvez aussi
-> faire `supabase link --project-ref <ref>` puis `supabase db push`.
+Les deux scripts sont **relançables** sans erreur : en cas de doute, exécutez-les
+à nouveau. `0002` se termine par `notify pgrst, 'reload schema'`, qui force
+l'API à prendre en compte les nouvelles fonctions immédiatement.
 
-Ce script crée :
-- les tables du domaine (`chambres`, `clients`, `sejours`, `reservations`,
-  `paiements`, `notifications`, `parametres`, etc.) ;
-- une table `profiles` liée à `auth.users` (nom, rôle) avec un trigger qui la
-  remplit automatiquement à la création d'un compte ;
-- **Row Level Security** activé partout : lecture ouverte aux utilisateurs
-  authentifiés actifs, écriture **interdite** en direct (uniquement via les
-  fonctions RPC ci-dessous) ;
-- les fonctions RPC qui reproduisent exactement la logique métier de
-  l'ancien backend (`check_in`, `check_out`, `extend_stay`, `record_payment`,
-  `create_reservation`, `cancel_reservation`, `valider_nettoyage`,
-  `signaler_anomalie`, `get_dashboard`, `update_settings`, gestion des
-  utilisateurs...).
+> Avec la CLI (`npm i -g supabase`) : `supabase link --project-ref <ref>` puis
+> `supabase db push`.
+
+### Dépannage : « Could not find the function public.get_dashboard without parameters in the schema cache »
+
+Ce message signifie que l'API ne trouve pas la fonction dans la base. Causes
+possibles :
+
+- `0001_init.sql` n'a jamais été exécuté, ou a échoué en cours de route.
+  L'ancienne version n'était pas relançable (`policy ... already exists`) et une
+  erreur annule **tout** le script — y compris `get_dashboard`. La version
+  actuelle est relançable.
+- `0002_corrections.sql` n'a pas été exécuté.
+- Le cache de l'API n'a pas été rechargé : exécutez `notify pgrst, 'reload schema';`
+  dans l'éditeur SQL.
+
+Vérification rapide :
+
+```sql
+select proname, pg_get_function_identity_arguments(oid)
+from pg_proc where pronamespace = 'public'::regnamespace and proname = 'get_dashboard';
+```
 
 ## 3. Créer le premier administrateur
 
-Aucun utilisateur n'est créé par la migration (impossible de le faire de
-façon fiable/portable en SQL pur). Procédure recommandée :
+> **Sécurité.** Le rôle d'un compte n'est **plus** lu dans les « User Metadata »
+> (modifiables par n'importe qui lors d'une inscription), mais uniquement dans
+> `app_metadata`, que seule la clé `service_role` peut écrire. Tout compte créé
+> hors de l'application est créé **désactivé**.
+>
+> Désactivez aussi les inscriptions publiques : **Authentication → Sign In /
+> Providers → « Allow new users to sign up » = off**.
 
-1. **Authentication → Users → Add user** dans le dashboard Supabase.
-2. Renseignez l'e-mail et un mot de passe.
-3. Dans **User Metadata** (champ JSON), ajoutez :
-   ```json
-   { "nom": "Admin", "prenoms": "Hellas", "role": "admin" }
-   ```
-   Le trigger `handle_new_user` créera automatiquement la ligne `profiles`
-   correspondante avec le rôle `admin`.
-4. Si vous avez créé l'utilisateur sans ces métadonnées, corrigez ensuite
-   dans l'éditeur SQL :
+1. **Authentication → Users → Add user → Create new user** : e-mail + mot de
+   passe, cochez « Auto Confirm User ».
+2. Dans l'éditeur SQL, promouvez et activez ce compte :
    ```sql
-   update public.profiles set role = 'admin' where id = '<uid de l'utilisateur>';
+   update public.profiles
+   set role = 'admin', actif = true, nom = 'Admin', prenoms = 'Hellas'
+   where id = (select id from auth.users where email = 'votre@email.ci');
    ```
 
-Les comptes suivants (gérant, réception, entretien) se créent ensuite
-directement depuis l'application, onglet **Utilisateurs** (réservé aux
-admins) — voir section 4.
+Les comptes suivants (gérant, réception, entretien) se créent depuis
+l'application, onglet **Utilisateurs** (Edge Function `admin-create-user`).
 
 ## 4. Déployer les Edge Functions
 
@@ -96,7 +106,11 @@ supabase functions deploy cron-alerts --no-verify-jwt
 
 `cron-alerts` est déployée **sans** vérification JWT car elle est appelée par
 `pg_cron`/`pg_net`, pas par un utilisateur connecté — elle est protégée à la
-place par le secret `CRON_SECRET` (en-tête `x-cron-secret`).
+place par le secret `CRON_SECRET` (en-tête `x-cron-secret`), **obligatoire** :
+sans lui, la fonction refuse toutes les requêtes.
+
+`notify` vérifie elle-même le rôle de l'appelant (réception/admin pour les
+envois, gérant/admin pour les relances).
 
 Sans `WHATSAPP_*`, l'application continue de fonctionner normalement : chaque
 tentative d'envoi est journalisée en échec dans l'onglet Notifications, avec
@@ -157,12 +171,23 @@ npm run dev
 | Clé WhatsApp dans `backend/.env` | Secrets d'Edge Function (jamais exposés, jamais dans le frontend) |
 | Un seul serveur à héberger et surveiller | Rien à héberger : Postgres + Auth + Edge Functions + cron sont managés par Supabase |
 
-## 8. Limites connues / prochaines étapes suggérées
+## 8. Règles métier (depuis 0002)
 
-- Ajouter des tests automatisés sur les fonctions RPC (pgTAP ou Vitest côté
-  frontend avec un projet Supabase de test).
-- Ajouter l'upload de photos (pièce d'identité, chambres) via **Supabase
-  Storage** (bucket privé + policies RLS sur `storage.objects`).
-- Envisager des **templates WhatsApp approuvés** (Meta Business Manager) pour
-  le tout premier contact avec un nouveau gérant, comme documenté dans
-  l'ancien `backend/README.md`.
+- **Réservations** : une réservation future ne bloque plus la chambre ; celle-ci
+  passe « réservée » le jour de l'arrivée (synchronisation automatique au
+  chargement du tableau de bord et toutes les 5 min via `cron-alerts`). Les
+  réservations dont la date de départ est passée sans arrivée deviennent
+  « client absent ». Le check-in se fait depuis la réservation et reprend
+  l'avance versée.
+- **Chevauchements** : check-in, prolongation et réservation refusent toute
+  période en conflit avec une autre réservation ou un séjour en cours.
+- **Anomalies** : signalée sur une chambre occupée, elle est notée sans changer
+  le statut ; la chambre passe en maintenance au check-out.
+- **Clients** : une fiche est réutilisée si la même pièce d'identité revient.
+- **Rôle entretien** : le tableau de bord ne lui renvoie aucune donnée financière.
+
+## 9. Pistes d'amélioration
+
+- Tests automatisés des fonctions RPC (pgTAP).
+- Upload des pièces d'identité via **Supabase Storage** (bucket privé + RLS).
+- Templates WhatsApp approuvés (Meta Business Manager).
