@@ -22,10 +22,17 @@ export async function updateRoom(id, patch) {
 
 /**
  * Polling-based subscription — remplace Supabase Realtime.
- * Appelle onChange() toutes les 30 secondes et renvoie une fonction
- * de désabonnement (clearInterval).
+ * Appelle onChange(table, payload) toutes les 30 secondes et
+ * renvoie la fonction de désabonnement (clearInterval).
  */
-export function subscribeRooms(onChange) {
-  const id = setInterval(() => onChange(), 30_000);
+export function subscribeHotel(onChange) {
+  const id = setInterval(() => {
+    onChange("chambres", {});
+    onChange("sejours", {});
+    onChange("reservations", {});
+  }, 30_000);
   return () => clearInterval(id);
 }
+
+// Alias pour rétrocompatibilité
+export const subscribeRooms = subscribeHotel;
