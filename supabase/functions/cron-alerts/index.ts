@@ -12,9 +12,15 @@ import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
 import { supabaseAdmin } from "../_shared/supabaseAdmin.ts";
 import { sendRaw, buildUpcomingAlertMessage, buildDailySummaryMessage } from "../_shared/whatsapp.ts";
 
-async function managerNumber(db: ReturnType<typeof supabaseAdmin>) {
-  const { data } = await db.from("parametres").select("valeur").eq("cle", "manager_whatsapp").maybeSingle();
-  return data?.valeur || Deno.env.get("MANAGER_WHATSAPP_NUMBER") || "";
+async function getRecipients(db: ReturnType<typeof supabaseAdmin>): Promise<string[]> {
+  const { data } = await db.from("parametres").select("cle, valeur").in("cle", ["admin_whatsapp", "manager_whatsapp"]);
+  const map: Record<string, string> = {};
+  (data || []).forEach((row: { cle: string; valeur: string }) => { map[row.cle] = row.valeur; });
+
+  const adminNum = map["admin_whatsapp"] || Deno.env.get("WHATSAPP_ADMIN_NUMBER") || "";
+  const gerantNum = map["manager_whatsapp"] || Deno.env.get("MANAGER_WHATSAPP_NUMBER") || "";
+
+  return [adminNum, gerantNum].filter(Boolean);
 }
 
 async function logAndSend(
@@ -45,7 +51,7 @@ async function runCheckoutAlerts(db: ReturnType<typeof supabaseAdmin>) {
 
   const { data: sejours, error } = await db.rpc("get_upcoming_checkouts", { p_window_minutes: 30 });
   if (error) throw error;
-  const to = await managerNumber(db);
+  const recipients = await getRecipients(db);
   let sent = 0;
 
   for (const sejour of sejours ?? []) {
@@ -63,7 +69,8 @@ async function runCheckoutAlerts(db: ReturnType<typeof supabaseAdmin>) {
       chambre: { numero: sejour.chambre_numero },
       sejour,
     });
-    await logAndSend(db, { type: "alerte-fin-sejour", to, message, sejourId: sejour.id });
+    // Envoyer aux deux destinataires
+    await Promise.all(recipients.map((to) => logAndSend(db, { type: "alerte-fin-sejour", to, message, sejourId: sejour.id })));
     sent++;
   }
   return { checked: sejours?.length ?? 0, sent };
@@ -82,9 +89,10 @@ async function runDailySummary(db: ReturnType<typeof supabaseAdmin>) {
 
   const { data: stats, error } = await db.rpc("get_daily_summary", { p_day: today });
   if (error) throw error;
-  const to = await managerNumber(db);
+  const recipients = await getRecipients(db);
   const message = buildDailySummaryMessage(stats);
-  await logAndSend(db, { type: "resume-journalier", to, message });
+  // Envoyer aux deux destinataires
+  await Promise.all(recipients.map((to) => logAndSend(db, { type: "resume-journalier", to, message })));
   return { skipped: false };
 }
 

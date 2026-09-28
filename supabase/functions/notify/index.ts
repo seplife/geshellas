@@ -25,9 +25,16 @@ import {
 
 const MAX_RETRIES = Number(Deno.env.get("WHATSAPP_MAX_RETRIES") || 3);
 
-async function managerNumber(db: ReturnType<typeof supabaseAdmin>) {
-  const { data } = await db.from("parametres").select("valeur").eq("cle", "manager_whatsapp").maybeSingle();
-  return data?.valeur || Deno.env.get("MANAGER_WHATSAPP_NUMBER") || "";
+/** Retourne les numéros des destinataires : admin + gérant (depuis la DB ou les secrets). */
+async function getRecipients(db: ReturnType<typeof supabaseAdmin>): Promise<string[]> {
+  const { data } = await db.from("parametres").select("cle, valeur").in("cle", ["admin_whatsapp", "manager_whatsapp"]);
+  const map: Record<string, string> = {};
+  (data || []).forEach((row: { cle: string; valeur: string }) => { map[row.cle] = row.valeur; });
+
+  const adminNum = map["admin_whatsapp"] || Deno.env.get("WHATSAPP_ADMIN_NUMBER") || "";
+  const gerantNum = map["manager_whatsapp"] || Deno.env.get("MANAGER_WHATSAPP_NUMBER") || "";
+
+  return [adminNum, gerantNum].filter(Boolean);
 }
 
 async function sendWithLogging(
@@ -93,7 +100,12 @@ Deno.serve(async (req) => {
         .single();
       if (sejourErr || !sejour) return jsonResponse({ error: "Séjour introuvable." }, 404);
 
-      const to = await managerNumber(db);
+      // Récupérer les deux destinataires : admin + gérant
+      const recipients = await getRecipients(db);
+      if (recipients.length === 0) {
+        return jsonResponse({ error: "Aucun numéro destinataire configuré." }, 500);
+      }
+
       const ctx = { client: sejour.clients, chambre: sejour.chambres, sejour };
 
       let message: string;
@@ -109,8 +121,13 @@ Deno.serve(async (req) => {
         return jsonResponse({ error: "Type de notification inconnu." }, 400);
       }
 
-      const result = await sendWithLogging(db, { type: body.type, to, message, sejourId: sejour.id });
-      return jsonResponse(result);
+      // Envoyer à chaque destinataire (admin + gérant) en parallèle
+      const results = await Promise.all(
+        recipients.map((to) => sendWithLogging(db, { type: body.type, to, message, sejourId: sejour.id }))
+      );
+
+      const allOk = results.every((r) => r.ok);
+      return jsonResponse({ ok: allOk, results });
     }
 
     return jsonResponse({ error: "Action inconnue." }, 400);

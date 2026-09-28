@@ -2,6 +2,7 @@ const express = require('express');
 const pool = require('../db');
 const auth = require('../middleware/auth');
 const requireRole = require('../middleware/requireRole');
+const { sendToAll, getRecipients, buildCheckInMessage, buildCheckOutMessage } = require('../services/whatsapp');
 
 const router = express.Router();
 
@@ -73,6 +74,36 @@ router.post('/checkin', auth, requireRole('admin', 'reception'), async (req, res
     await connection.query('UPDATE chambres SET statut = ? WHERE id = ?', ['occupee', chambre_id]);
 
     await connection.commit();
+
+    // Notification WhatsApp — envoi non-bloquant (fire-and-forget)
+    setImmediate(async () => {
+      try {
+        const [chambresRows] = await pool.query('SELECT numero FROM chambres WHERE id = ?', [chambre_id]);
+        const chambre = chambresRows[0] || { numero: String(chambre_id) };
+
+        const [sejourRows] = await pool.query('SELECT * FROM sejours WHERE id = ?', [sejourRes.insertId]);
+        const sejour = sejourRows[0] || {};
+
+        const message = buildCheckInMessage({
+          client: { nom: client.nom, prenoms: client.prenoms, telephone: client.telephone },
+          chambre,
+          sejour: {
+            heure_entree,
+            date_entree,
+            date_sortie_prevue,
+            montant_total: montantTotal,
+          },
+        });
+
+        const recipients = getRecipients();
+        if (recipients.length > 0) {
+          await sendToAll(recipients, message);
+        }
+      } catch (notifErr) {
+        console.error('[WhatsApp] Erreur lors de l\'envoi de la notification check-in :', notifErr);
+      }
+    });
+
     res.status(201).json({ message: 'Check-in réussi', sejour_id: sejourRes.insertId });
   } catch (error) {
     await connection.rollback();
@@ -115,6 +146,45 @@ router.post('/checkout/:id', auth, requireRole('admin', 'reception'), async (req
     await connection.query('UPDATE chambres SET statut = ? WHERE id = ?', ['nettoyage', sejour.chambre_id]);
 
     await connection.commit();
+
+    // Notification WhatsApp — envoi non-bloquant (fire-and-forget)
+    const chambreIdForNotif = sejour.chambre_id;
+    const sejourIdForNotif = id;
+    setImmediate(async () => {
+      try {
+        const [sejourRows] = await pool.query(`
+          SELECT s.*, c.nom as client_nom, c.prenoms as client_prenoms, c.telephone as client_telephone,
+                 ch.numero as chambre_numero
+          FROM sejours s
+          JOIN clients c ON s.client_id = c.id
+          JOIN chambres ch ON s.chambre_id = ch.id
+          WHERE s.id = ?
+        `, [sejourIdForNotif]);
+
+        if (sejourRows.length > 0) {
+          const row = sejourRows[0];
+          const message = buildCheckOutMessage({
+            client: { nom: row.client_nom, prenoms: row.client_prenoms },
+            chambre: { numero: row.chambre_numero },
+            sejour: {
+              heure_sortie_reelle: row.heure_sortie_reelle,
+              date_sortie_reelle: row.date_sortie_reelle,
+              montant_total: row.montant_total,
+              montant_paye: row.montant_paye,
+              solde: row.solde,
+            },
+          });
+
+          const recipients = getRecipients();
+          if (recipients.length > 0) {
+            await sendToAll(recipients, message);
+          }
+        }
+      } catch (notifErr) {
+        console.error('[WhatsApp] Erreur lors de l\'envoi de la notification check-out :', notifErr);
+      }
+    });
+
     res.json({ message: 'Checkout réussi' });
   } catch (error) {
     await connection.rollback();
