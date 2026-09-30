@@ -1,9 +1,17 @@
-import { api } from "../lib/apiClient.js";
+import { supabase, raise } from "../lib/supabaseClient.js";
+import { invokeFunction } from "./_fn.js";
 
 export async function listNotifications() {
-  return api.get("/notifications");
+  const { data, error } = await supabase
+    .from("notifications")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(200);
+  if (error) raise(error);
+  return data || [];
 }
 
 export async function retryNotification(id) {
-  return api.post(`/notifications/retry/${id}`);
+  return invokeFunction("notify", { action: "retry", notification_id: id });
 }
+

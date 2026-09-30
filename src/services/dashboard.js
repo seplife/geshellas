@@ -1,5 +1,8 @@
-import { api } from "../lib/apiClient.js";
+import { supabase, raise } from "../lib/supabaseClient.js";
 
 export async function getDashboard() {
-  return api.get("/dashboard");
+  const { data, error } = await supabase.rpc("get_dashboard");
+  if (error) raise(error);
+  return data;
 }
+

@@ -1,38 +1,52 @@
-import { api } from "../lib/apiClient.js";
+import { supabase, raise } from "../lib/supabaseClient.js";
 
 export async function listRooms() {
-  return api.get("/rooms");
+  const { data, error } = await supabase
+    .from("chambres")
+    .select("*")
+    .order("numero", { ascending: true });
+  if (error) raise(error);
+  return data || [];
 }
 
 export async function validerNettoyage(roomId) {
-  return api.post(`/rooms/clean/${roomId}`);
+  const { error } = await supabase.rpc("valider_nettoyage", { p_chambre_id: roomId });
+  if (error) raise(error);
 }
 
 export async function signalerAnomalie(roomId, description) {
-  return api.post(`/rooms/maintenance/${roomId}`, { description });
+  const { error } = await supabase.rpc("signaler_anomalie", {
+    p_chambre_id: roomId,
+    p_description: description,
+  });
+  if (error) raise(error);
 }
 
 export async function createRoom(room) {
-  return api.post("/rooms", room);
+  const { data, error } = await supabase.rpc("create_room", { p_room: room });
+  if (error) raise(error);
+  return data;
 }
 
 export async function updateRoom(id, patch) {
-  return api.put(`/rooms/${id}`, patch);
+  const { data, error } = await supabase.rpc("update_room", { p_id: id, p_room: patch });
+  if (error) raise(error);
+  return data;
 }
 
-/**
- * Polling-based subscription — remplace Supabase Realtime.
- * Appelle onChange(table, payload) toutes les 30 secondes et
- * renvoie la fonction de désabonnement (clearInterval).
- */
-export function subscribeHotel(onChange) {
-  const id = setInterval(() => {
-    onChange("chambres", {});
-    onChange("sejours", {});
-    onChange("reservations", {});
-  }, 30_000);
-  return () => clearInterval(id);
+export function subscribeHotel(onChange, onStatus) {
+  const channel = supabase
+    .channel("hotel-live")
+    .on("postgres_changes", { event: "*", schema: "public", table: "chambres" }, (p) => onChange("chambres", p))
+    .on("postgres_changes", { event: "*", schema: "public", table: "sejours" }, (p) => onChange("sejours", p))
+    .on("postgres_changes", { event: "*", schema: "public", table: "reservations" }, (p) => onChange("reservations", p))
+    .on("postgres_changes", { event: "*", schema: "public", table: "notifications" }, (p) => onChange("notifications", p))
+    .subscribe((status) => onStatus?.(status === "SUBSCRIBED"));
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
 }
 
-// Alias pour rétrocompatibilité
 export const subscribeRooms = subscribeHotel;
+
