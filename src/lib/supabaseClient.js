@@ -4,9 +4,9 @@ import { createClient } from "@supabase/supabase-js";
 // conception (la sécurité repose sur RLS et les fonctions SECURITY DEFINER) ;
 // elle sert de repli si les variables d'environnement ne sont pas fournies au
 // build (ex. secrets GitHub Actions non configurés).
-const DEFAULT_URL = "https://jyrlfxrsdloizrfgaunc.supabase.co";
+const DEFAULT_URL = "https://yfstlcgdxxjoazyyourz.supabase.co";
 const DEFAULT_ANON_KEY =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp5cmxmeHJzZGxvaXpyZmdhdW5jIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY0ODE1ODEsImV4cCI6MjEwMjA1NzU4MX0.ckJKRUbI08k_oaonBZjBPXUQOyfWGekAVafFcQBg-58";
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inlmc3RsY2dkeHhqb2F6eXlvdXJ6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA3OTYwMTYsImV4cCI6MjEwNjM3MjAxNn0.T0gYzRsUTbVPxufAesLkXy5JNocesM3jVbUW02hgmdo"
 
 const url = import.meta.env.VITE_SUPABASE_URL || DEFAULT_URL;
 const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || DEFAULT_ANON_KEY;
