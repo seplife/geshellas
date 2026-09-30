@@ -32,8 +32,12 @@ export function AuthProvider({ children }) {
     return data;
   };
 
-  const register = async (email, password, fullName) => {
-    const data = await api.post("/auth/register", { email, password, full_name: fullName });
+  const register = async (emailOrPayload, password, fullName) => {
+    const body =
+      typeof emailOrPayload === "object" && emailOrPayload !== null
+        ? emailOrPayload
+        : { email: emailOrPayload, password, full_name: fullName };
+    const data = await api.post("/auth/register", body);
     return data;
   };
 

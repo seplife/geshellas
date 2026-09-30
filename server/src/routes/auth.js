@@ -11,11 +11,11 @@ const router = express.Router();
 // Accepte { email, password, full_name } depuis le frontend React
 // ou { email, password, nom, prenoms } depuis d'autres clients
 router.post('/register', async (req, res) => {
-  const { email, password, full_name, nom: nomField, prenoms: prenomsField } = req.body;
+  const { email, password, full_name, nom: nomField, prenoms: prenomsField, telephone } = req.body;
 
   // Supporte "full_name" (frontend) ou "nom"/"prenoms" séparés
-  let nom = nomField;
-  let prenoms = prenomsField || '';
+  let nom = nomField ? nomField.trim() : '';
+  let prenoms = prenomsField ? prenomsField.trim() : '';
   if (!nom && full_name) {
     const parts = full_name.trim().split(' ');
     nom = parts[0];
@@ -33,7 +33,7 @@ router.post('/register', async (req, res) => {
   try {
     await connection.beginTransaction();
 
-    const [existing] = await connection.query('SELECT id FROM users WHERE email = ?', [email]);
+    const [existing] = await connection.query('SELECT id FROM users WHERE email = ?', [email.trim()]);
     if (existing.length > 0) {
       await connection.rollback();
       return res.status(400).json({ message: 'Cet email est déjà utilisé.' });
@@ -44,11 +44,11 @@ router.post('/register', async (req, res) => {
 
     await connection.query(
       'INSERT INTO users (id, email, password_hash) VALUES (?, ?, ?)',
-      [userId, email, passwordHash]
+      [userId, email.trim(), passwordHash]
     );
     await connection.query(
-      'INSERT INTO profiles (id, nom, prenoms, role, actif) VALUES (?, ?, ?, ?, ?)',
-      [userId, nom, prenoms, 'reception', true]
+      'INSERT INTO profiles (id, nom, prenoms, telephone, role, actif) VALUES (?, ?, ?, ?, ?, ?)',
+      [userId, nom, prenoms, telephone ? telephone.trim() : null, 'reception', true]
     );
 
     await connection.commit();
