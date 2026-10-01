@@ -23,10 +23,16 @@ export default defineConfig({
         target: "https://yfstlcgdxxjoazyyourz.supabase.co",
         changeOrigin: true,
         secure: false,
-        ws: true,
         rewrite: (path) => path.replace(/^\/supabase/, ""),
+        configure: (proxy) => {
+          proxy.on("proxyRes", (proxyRes) => {
+            delete proxyRes.headers["set-cookie"];
+            delete proxyRes.headers["Set-Cookie"];
+          });
+        },
       },
     },
   },
 });
+
 

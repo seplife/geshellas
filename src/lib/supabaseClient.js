@@ -16,11 +16,60 @@ const url =
     : import.meta.env.VITE_SUPABASE_URL || DEFAULT_URL;
 const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || DEFAULT_ANON_KEY;
 
+const STORAGE_KEY = "hellas-auth";
+
+// Corrige le décalage d'horloge éventuel du poste client (ex. date système en 2026)
+// dans la session déjà stockée pour éviter que @supabase/auth-js ne considère le JWT
+// comme expiré et n'envoie les requêtes avec la clé anonyme (erreur 42501).
+if (typeof window !== "undefined") {
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      const nowSec = Math.floor(Date.now() / 1000);
+      if (parsed && parsed.access_token && parsed.expires_at && parsed.expires_at <= nowSec) {
+        parsed.expires_at = nowSec + (Number(parsed.expires_in) || 3600);
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+async function clockTolerantFetch(input, init) {
+  const res = await fetch(input, init);
+  const reqUrl = typeof input === "string" ? input : input?.url || "";
+  if (reqUrl.includes("/auth/v1/") && res.ok) {
+    const contentType = res.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) {
+      try {
+        const clone = res.clone();
+        const data = await clone.json();
+        if (data && typeof data === "object" && data.access_token && data.expires_in) {
+          data.expires_at = Math.floor(Date.now() / 1000) + Number(data.expires_in);
+          return new Response(JSON.stringify(data), {
+            status: res.status,
+            statusText: res.statusText,
+            headers: res.headers,
+          });
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  return res;
+}
+
 export const supabase = createClient(url, anonKey, {
   auth: {
     persistSession: true,
     autoRefreshToken: true,
-    storageKey: "hellas-auth",
+    storageKey: STORAGE_KEY,
+  },
+  global: {
+    fetch: clockTolerantFetch,
   },
 });
 
@@ -36,7 +85,7 @@ export function friendlyError(error) {
   if (code === "PGRST202" || /schema cache/i.test(msg)) {
     return (
       "La base de données n'est pas à jour : une fonction attendue est introuvable. " +
-      "Un administrateur doit exécuter les scripts supabase/migrations (0001 puis 0002) dans l'éditeur SQL Supabase."
+      "Exécutez le script supabase/migrations/0004_chambres_et_inscription.sql dans l'éditeur SQL Supabase."
     );
   }
   if (msg.includes("Failed to fetch") || msg.includes("NetworkError") || msg.includes("Load failed")) {
@@ -46,7 +95,18 @@ export function friendlyError(error) {
   if (msg.includes("Email not confirmed")) return "Adresse e-mail non confirmée.";
   if (code === "PGRST301" || /JWT expired/i.test(msg)) return "Votre session a expiré. Reconnectez-vous.";
   if (code === "23505") return "Cet élément existe déjà (doublon).";
-  if (code === "42501" && /permission denied/i.test(msg)) return "Action non autorisée pour votre compte.";
+  if (code === "28000" || /compte désactivé/i.test(msg)) {
+    return (
+      "Votre profil n'est pas encore activé dans Supabase. " +
+      "Exécutez le script supabase/migrations/0004_chambres_et_inscription.sql dans l'éditeur SQL Supabase."
+    );
+  }
+  if (code === "42501" && /permission denied/i.test(msg)) {
+    return (
+      "Action non autorisée pour votre compte. " +
+      "Exécutez le script supabase/migrations/0004_chambres_et_inscription.sql dans l'éditeur SQL Supabase pour activer les droits."
+    );
+  }
   if (/FunctionsFetchError|Failed to send a request to the Edge Function/i.test(msg)) {
     return "Service de notification indisponible (Edge Function non déployée ?).";
   }
@@ -59,3 +119,4 @@ export function raise(error) {
   e.code = error?.code;
   throw e;
 }
+

@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { Plus, Search, Pencil, LogIn, LogOut, CalendarPlus, Wallet, Wrench, Sparkles, BedDouble, Users as UsersIcon } from "lucide-react";
+import { Plus, Search, Pencil, Trash2, LogIn, LogOut, CalendarPlus, Wallet, Wrench, Sparkles, BedDouble, Users as UsersIcon } from "lucide-react";
 import Badge, { STATUS } from "../components/ui/Badge.jsx";
 import Button from "../components/ui/Button.jsx";
 import { Input, Select } from "../components/ui/Field.jsx";
@@ -12,7 +12,7 @@ import { fmtFCFA, fmtDate, fmtTime, todayStr } from "../lib/format.js";
 
 export default function RoomsPage({
   rooms, activeStays, error, onRetry, role,
-  onCheckIn, onCheckOut, onExtend, onPay, onClean, onMaintenance, onCreateRoom, onEditRoom,
+  onCheckIn, onCheckOut, onExtend, onPay, onClean, onMaintenance, onCreateRoom, onEditRoom, onDeleteRoom,
 }) {
   const [filterStatus, setFilterStatus] = useState("tous");
   const [filterFloor, setFilterFloor] = useState("tous");
@@ -33,6 +33,7 @@ export default function RoomsPage({
   });
 
   const canOperate = CAN.operate(role);
+  const canManageRooms = CAN.manageRooms(role);
   const canClean = CAN.clean(role);
   const canReport = CAN.reportIssue(role);
   const today = todayStr();
@@ -42,7 +43,7 @@ export default function RoomsPage({
       <PageHeader
         title="Chambres"
         subtitle={rooms ? `${filtered.length} affichée(s) sur ${list.length}` : "Chargement…"}
-        actions={role === "admin" && <Button icon={Plus} onClick={onCreateRoom}>Nouvelle chambre</Button>}
+        actions={canManageRooms && <Button icon={Plus} onClick={onCreateRoom}>Nouvelle chambre</Button>}
       />
 
       {error && <ErrorState message={error} onRetry={onRetry} />}
@@ -81,8 +82,8 @@ export default function RoomsPage({
         <EmptyState
           icon={BedDouble}
           title={list.length === 0 ? "Aucune chambre configurée." : "Aucune chambre ne correspond à ces filtres."}
-          hint={list.length === 0 && role === "admin" ? "Ajoutez vos chambres pour commencer." : undefined}
-          action={list.length === 0 && role === "admin" && <Button icon={Plus} onClick={onCreateRoom}>Nouvelle chambre</Button>}
+          hint={list.length === 0 && canManageRooms ? "Ajoutez vos chambres pour commencer." : undefined}
+          action={list.length === 0 && canManageRooms && <Button icon={Plus} onClick={onCreateRoom}>Nouvelle chambre</Button>}
         />
       ) : (
         <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-4">
@@ -93,12 +94,31 @@ export default function RoomsPage({
               <article key={room.id} className="card p-4 flex flex-col gap-3 hover:shadow-pop transition-shadow">
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5">
                       <h3 className="text-lg font-semibold font-display">Chambre {room.numero}</h3>
-                      {role === "admin" && (
-                        <button type="button" className="btn-icon h-7 w-7" onClick={() => onEditRoom(room)} aria-label={`Modifier la chambre ${room.numero}`}>
-                          <Pencil className="h-3.5 w-3.5" />
-                        </button>
+                      {canManageRooms && (
+                        <>
+                          <button
+                            type="button"
+                            className="btn-icon h-7 w-7"
+                            onClick={() => onEditRoom(room)}
+                            title={`Modifier la chambre ${room.numero}`}
+                            aria-label={`Modifier la chambre ${room.numero}`}
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                          {onDeleteRoom && (
+                            <button
+                              type="button"
+                              className="btn-icon h-7 w-7 text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-500/10"
+                              onClick={() => onDeleteRoom(room)}
+                              title={`Supprimer la chambre ${room.numero}`}
+                              aria-label={`Supprimer la chambre ${room.numero}`}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                        </>
                       )}
                     </div>
                     <div className="text-xs text-stone-500 dark:text-stone-400 flex flex-wrap gap-x-2">
@@ -155,6 +175,16 @@ export default function RoomsPage({
                   {room.statut !== "maintenance" && canReport && (
                     <Button size="sm" variant="ghost" icon={Wrench} onClick={() => onMaintenance(room)}>Anomalie</Button>
                   )}
+                  {canManageRooms && (
+                    <>
+                      <Button size="sm" variant="subtle" icon={Pencil} onClick={() => onEditRoom(room)}>Modifier</Button>
+                      {onDeleteRoom && (
+                        <Button size="sm" variant="ghost" icon={Trash2} className="text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-500/10" onClick={() => onDeleteRoom(room)}>
+                          Supprimer
+                        </Button>
+                      )}
+                    </>
+                  )}
                 </div>
               </article>
             );
@@ -164,3 +194,4 @@ export default function RoomsPage({
     </div>
   );
 }
+

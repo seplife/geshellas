@@ -27,7 +27,7 @@ import ClientDetailModal from "./pages/modals/ClientDetailModal.jsx";
 import { NAV_BY_ROLE, NAV_ITEMS } from "./constants.js";
 import { todayStr } from "./lib/format.js";
 import { getDashboard } from "./services/dashboard.js";
-import { listRooms, validerNettoyage, signalerAnomalie, subscribeHotel, createRoom, updateRoom } from "./services/rooms.js";
+import { listRooms, validerNettoyage, signalerAnomalie, subscribeHotel, createRoom, updateRoom, deleteRoom } from "./services/rooms.js";
 import { listClients } from "./services/clients.js";
 import { listStays, checkIn, checkOut, extendStay } from "./services/stays.js";
 import { listReservations, createReservation, cancelReservation, markReservationAbsent } from "./services/reservations.js";
@@ -223,6 +223,15 @@ export default function App() {
               onMaintenance={(room) => setModal({ type: "maintenance", room })}
               onCreateRoom={() => setModal({ type: "room" })}
               onEditRoom={(room) => setModal({ type: "room", room })}
+              onDeleteRoom={(room) =>
+                confirm(
+                  `Supprimer la chambre ${room.numero} ?`,
+                  `La chambre ${room.numero} (${room.type}) sera définitivement supprimée.`,
+                  () => deleteRoom(room.id),
+                  `Chambre ${room.numero} supprimée.`,
+                  { danger: true, confirmLabel: "Supprimer la chambre" }
+                )
+              }
             />
           )}
           {tab === "reservations" && canSee("reservations") && (

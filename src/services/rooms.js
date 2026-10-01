@@ -34,7 +34,30 @@ export async function updateRoom(id, patch) {
   return data;
 }
 
+export async function deleteRoom(id) {
+  const { error } = await supabase.rpc("delete_room", { p_id: id });
+  if (error) {
+    // Repli sur DELETE direct si la fonction RPC delete_room n'a pas encore été créée
+    if (error.code === "PGRST202" || /delete_room/i.test(error.message || "")) {
+      const { error: delErr } = await supabase.from("chambres").delete().eq("id", id);
+      if (delErr) raise(delErr);
+      return;
+    }
+    raise(error);
+  }
+}
+
 export function subscribeHotel(onChange, onStatus) {
+  // En développement local, on utilise un rafraîchissement périodique pour éviter
+  // l'avertissement de cookie Cloudflare (__cf_bm) sur le WebSocket dans Firefox.
+  if (import.meta.env.DEV) {
+    onStatus?.(true);
+    const id = setInterval(() => {
+      onChange("chambres", {});
+    }, 20_000);
+    return () => clearInterval(id);
+  }
+
   const channel = supabase
     .channel("hotel-live")
     .on("postgres_changes", { event: "*", schema: "public", table: "chambres" }, (p) => onChange("chambres", p))
@@ -49,4 +72,5 @@ export function subscribeHotel(onChange, onStatus) {
 }
 
 export const subscribeRooms = subscribeHotel;
+
 

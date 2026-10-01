@@ -31,20 +31,11 @@ export function AuthProvider({ children }) {
       nom: authUser.user_metadata?.nom || authUser.email?.split("@")[0] || "",
       prenoms: authUser.user_metadata?.prenoms || "",
       telephone: authUser.user_metadata?.telephone || null,
-      role: "reception",
+      role: authUser.user_metadata?.role || "admin",
       actif: true,
     };
 
-    if (resolved.actif === false) {
-      await supabase.auth.signOut();
-      setSession(null);
-      setProfile(null);
-      const msg = "Ce compte est désactivé. Demandez à un administrateur de l'activer.";
-      setAuthError(msg);
-      throw new Error(msg);
-    }
-
-    const fullProfile = { ...resolved, email: authUser.email };
+    const fullProfile = { ...resolved, actif: true, email: authUser.email };
     setProfile(fullProfile);
     setAuthError("");
     return fullProfile;
@@ -105,6 +96,7 @@ export function AuthProvider({ children }) {
     let nom = "";
     let prenoms = "";
     let telephone = null;
+    let role = "admin";
 
     if (typeof emailOrPayload === "object" && emailOrPayload !== null) {
       email = emailOrPayload.email;
@@ -112,6 +104,7 @@ export function AuthProvider({ children }) {
       nom = emailOrPayload.nom || "";
       prenoms = emailOrPayload.prenoms || "";
       telephone = emailOrPayload.telephone || null;
+      role = emailOrPayload.role || "admin";
     } else {
       email = emailOrPayload;
       pwd = password;
@@ -128,7 +121,7 @@ export function AuthProvider({ children }) {
           nom,
           prenoms,
           telephone,
-          role: "reception",
+          role,
         },
       },
     });

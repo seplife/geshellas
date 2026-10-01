@@ -29,7 +29,8 @@ export const NAV_BY_ROLE = {
 
 /** Droits d'action (miroir des contrôles faits dans la base). */
 export const CAN = {
-  operate: (role) => role === "admin" || role === "reception",
+  operate: (role) => role === "admin" || role === "reception" || role === "gerant",
+  manageRooms: (role) => role === "admin" || role === "gerant" || role === "reception",
   clean: (role) => role === "admin" || role === "entretien",
   reportIssue: (role) => role === "admin" || role === "entretien" || role === "reception",
   retryNotification: (role) => role === "admin" || role === "gerant",
