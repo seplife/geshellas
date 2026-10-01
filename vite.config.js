@@ -18,5 +18,15 @@ export default defineConfig({
       host: "localhost",
       port: 5173,
     },
+    proxy: {
+      "/supabase": {
+        target: "https://yfstlcgdxxjoazyyourz.supabase.co",
+        changeOrigin: true,
+        secure: false,
+        ws: true,
+        rewrite: (path) => path.replace(/^\/supabase/, ""),
+      },
+    },
   },
 });
+

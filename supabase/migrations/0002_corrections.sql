@@ -70,6 +70,7 @@ set search_path = public
 as $$
 declare
   v_role role_utilisateur;
+  v_has_admin boolean;
 begin
   begin
     v_role := (new.raw_app_meta_data->>'role')::role_utilisateur;
@@ -77,14 +78,16 @@ begin
     v_role := null;
   end;
 
+  select exists(select 1 from public.profiles where role = 'admin' and actif = true) into v_has_admin;
+
   insert into public.profiles (id, nom, prenoms, telephone, role, actif)
   values (
     new.id,
     coalesce(nullif(new.raw_user_meta_data->>'nom', ''), split_part(new.email, '@', 1)),
     coalesce(new.raw_user_meta_data->>'prenoms', ''),
     new.raw_user_meta_data->>'telephone',
-    coalesce(v_role, 'reception'),
-    v_role is not null
+    coalesce(v_role, case when not v_has_admin then 'admin'::role_utilisateur else 'reception'::role_utilisateur end),
+    true
   )
   on conflict (id) do nothing;
   return new;
