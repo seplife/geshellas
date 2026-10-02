@@ -13,6 +13,10 @@ export default defineConfig({
   server: {
     host: "localhost",
     port: 5173,
+    headers: {
+      "Content-Security-Policy":
+        "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https: http: ws: wss:; connect-src 'self' https: http: ws: wss:; img-src 'self' data: blob: https: http:; font-src 'self' data: https: http:; style-src 'self' 'unsafe-inline' https: http:;",
+    },
     hmr: {
       protocol: "ws",
       host: "localhost",
@@ -28,11 +32,16 @@ export default defineConfig({
           proxy.on("proxyRes", (proxyRes) => {
             delete proxyRes.headers["set-cookie"];
             delete proxyRes.headers["Set-Cookie"];
+            delete proxyRes.headers["content-security-policy"];
+            delete proxyRes.headers["Content-Security-Policy"];
+            delete proxyRes.headers["content-security-policy-report-only"];
+            delete proxyRes.headers["x-content-security-policy"];
           });
         },
       },
     },
   },
 });
+
 
 
