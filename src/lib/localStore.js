@@ -156,23 +156,170 @@ export const localStore = {
     saveDb(db);
   },
 
-  // --- Séjours ---
-  listStays({ statut } = {}) {
+  // --- Séjours & Passages ---
+  listStays({ statut, type_sejour } = {}) {
     const db = loadDb();
     let list = [...db.sejours];
     if (statut) list = list.filter((s) => s.statut === statut);
+    if (type_sejour) {
+      list = list.filter((s) => (s.type_sejour || (String(s.numero).startsWith("PAS-") ? "passage" : "nuitee")) === type_sejour);
+    }
     return list.map((s) => {
       const c = db.clients.find((x) => Number(x.id) === Number(s.client_id));
       const r = db.chambres.find((x) => Number(x.id) === Number(s.chambre_id));
+      const isPassage = s.type_sejour === "passage" || String(s.numero || "").startsWith("PAS-");
+      const clim = s.type_climatisation || (r?.climatisation === "ventilee" ? "ventilee" : "climatisee");
       return {
         ...s,
-        client_nom: c?.nom || s.client_nom || "",
-        client_prenoms: c?.prenoms || s.client_prenoms || "",
+        type_sejour: isPassage ? "passage" : "nuitee",
+        type_climatisation: isPassage ? clim : s.type_climatisation,
+        tarif_horaire: isPassage ? (Number(s.tarif_horaire) || (clim === "ventilee" ? 2000 : 2500)) : null,
+        client_nom: c?.nom || s.client_nom || (isPassage ? "Client" : ""),
+        client_prenoms: c?.prenoms || s.client_prenoms || (isPassage ? "de passage" : ""),
         client_telephone: c?.telephone || s.client_telephone || "",
         chambre_numero: r?.numero || s.chambre_numero || "",
         prix_nuit: r?.prix_nuit || s.prix_nuit || 0,
       };
     });
+  },
+
+  listPassages({ statut } = {}) {
+    return this.listStays({ statut, type_sejour: "passage" });
+  },
+
+  createPassage(payload) {
+    const db = loadDb();
+    let room = db.chambres.find((r) => Number(r.id) === Number(payload.chambre_id));
+    if (!room && payload.room) {
+      room = { ...payload.room, id: Number(payload.chambre_id) };
+      db.chambres.push(room);
+    }
+    if (!room) throw new Error("Chambre introuvable.");
+
+    const clim = payload.type_climatisation === "ventilee" ? "ventilee" : "climatisee";
+    const tarifHoraire = clim === "ventilee" ? 2000 : 2500;
+    const dureeHeures = Math.max(1, Number(payload.duree_heures) || 1);
+    const montantTotal = dureeHeures * tarifHoraire;
+    const montantPaye = payload.montant_paye !== undefined && payload.montant_paye !== null && payload.montant_paye !== ""
+      ? Math.max(0, Number(payload.montant_paye))
+      : montantTotal;
+
+    const cData = payload.client || {};
+    const nom = (cData.nom || "").trim() || "Client";
+    const prenoms = (cData.prenoms || "").trim() || "de passage";
+    const telephone = (cData.telephone || "").trim() || "-";
+    const type_piece = cData.type_piece || "Autre";
+    const numero_piece = (cData.numero_piece || "").trim() || "PASSAGE";
+
+    let client = numero_piece !== "PASSAGE"
+      ? db.clients.find((c) => c.numero_piece === numero_piece && c.type_piece === type_piece)
+      : db.clients.find((c) => c.numero_piece === "PASSAGE" && c.nom === nom && c.prenoms === prenoms);
+
+    if (!client) {
+      client = {
+        id: nextId(db.clients),
+        nom,
+        prenoms,
+        sexe: cData.sexe || "M",
+        telephone,
+        whatsapp: telephone,
+        type_piece,
+        numero_piece,
+        created_at: new Date().toISOString(),
+      };
+      db.clients.unshift(client);
+    }
+
+    const dateEntree = payload.date_entree || todayStr();
+    const heureEntree = payload.heure_entree || new Date().toTimeString().slice(0, 5);
+    const [y, m, d] = dateEntree.split("-").map(Number);
+    const [hh, mm] = heureEntree.split(":").map(Number);
+    const outDt = new Date(y, (m || 1) - 1, d || 1, (hh || 0) + dureeHeures, mm || 0);
+    const pad2 = (n) => String(n).padStart(2, "0");
+    const dateSortiePrevue = payload.date_sortie_prevue || `${outDt.getFullYear()}-${pad2(outDt.getMonth() + 1)}-${pad2(outDt.getDate())}`;
+    const heureSortiePrevue = payload.heure_sortie_prevue || `${pad2(outDt.getHours())}:${pad2(outDt.getMinutes())}`;
+
+    const sejourId = nextId(db.sejours);
+    const sejour = {
+      id: sejourId,
+      numero: `PAS-${todayStr().replace(/-/g, "").slice(2)}-${String(sejourId).padStart(4, "0")}`,
+      client_id: client.id,
+      client_nom: client.nom,
+      client_prenoms: client.prenoms,
+      client_telephone: client.telephone,
+      chambre_id: room.id,
+      chambre_numero: room.numero,
+      type_sejour: "passage",
+      type_climatisation: clim,
+      duree_heures: dureeHeures,
+      tarif_horaire: tarifHoraire,
+      date_entree: dateEntree,
+      heure_entree: heureEntree,
+      date_sortie_prevue: dateSortiePrevue,
+      heure_sortie_prevue: heureSortiePrevue,
+      nb_personnes: Math.max(1, Number(payload.nb_personnes) || 1),
+      statut: "en_cours",
+      montant_total: montantTotal,
+      montant_paye: montantPaye,
+      solde: montantTotal - montantPaye,
+      local_only: true,
+      created_at: new Date().toISOString(),
+    };
+    db.sejours.unshift(sejour);
+    room.statut = "occupee";
+
+    if (montantPaye > 0) {
+      db.paiements.unshift({
+        id: nextId(db.paiements),
+        sejour_id: sejour.id,
+        montant: montantPaye,
+        mode_paiement: payload.mode_paiement || "Espèces",
+        reference: `Passage ${dureeHeures}h (${clim === "ventilee" ? "Ventilée" : "Climatisée"})`,
+        date_paiement: new Date().toISOString(),
+        local_only: true,
+      });
+    }
+
+    saveDb(db);
+    return { client, room, sejour };
+  },
+
+  extendPassage(sejourId, payload = {}) {
+    const db = loadDb();
+    const sejour = db.sejours.find((s) => Number(s.id) === Number(sejourId));
+    if (!sejour) throw new Error("Passage introuvable.");
+    const room = db.chambres.find((r) => Number(r.id) === Number(sejour.chambre_id));
+    const heuresSupp = Math.max(1, Number(payload.heures_supplementaires) || 1);
+    const tarif = Number(sejour.tarif_horaire) || (sejour.type_climatisation === "ventilee" ? 2000 : 2500);
+    const montantSupp = heuresSupp * tarif;
+    const paiement = Math.max(0, Number(payload.paiement_supplementaire) || 0);
+
+    const [y, m, d] = (sejour.date_sortie_prevue || todayStr()).split("-").map(Number);
+    const [hh, mm] = String(sejour.heure_sortie_prevue || "12:00").slice(0, 5).split(":").map(Number);
+    const outDt = new Date(y, (m || 1) - 1, d || 1, (hh || 0) + heuresSupp, mm || 0);
+    const pad2 = (n) => String(n).padStart(2, "0");
+
+    sejour.duree_heures = (Number(sejour.duree_heures) || 1) + heuresSupp;
+    sejour.date_sortie_prevue = `${outDt.getFullYear()}-${pad2(outDt.getMonth() + 1)}-${pad2(outDt.getDate())}`;
+    sejour.heure_sortie_prevue = `${pad2(outDt.getHours())}:${pad2(outDt.getMinutes())}`;
+    sejour.montant_total = Number(sejour.montant_total) + montantSupp;
+    sejour.montant_paye = Number(sejour.montant_paye) + paiement;
+    sejour.solde = sejour.montant_total - sejour.montant_paye;
+
+    if (paiement > 0) {
+      db.paiements.unshift({
+        id: nextId(db.paiements),
+        sejour_id: sejour.id,
+        montant: paiement,
+        mode_paiement: payload.mode_paiement || "Espèces",
+        reference: `Prolongation passage +${heuresSupp}h`,
+        date_paiement: new Date().toISOString(),
+        local_only: true,
+      });
+    }
+
+    saveDb(db);
+    return { sejour, chambre_numero: room?.numero || sejour.chambre_numero, montant_supplementaire: montantSupp };
   },
 
   checkIn(payload) {
@@ -214,6 +361,7 @@ export const localStore = {
       client_id: client.id,
       chambre_id: room.id,
       reservation_id: payload.reservation_id || null,
+      type_sejour: "nuitee",
       date_entree: payload.date_entree,
       heure_entree: payload.heure_entree,
       date_sortie_prevue: payload.date_sortie_prevue,
@@ -261,15 +409,16 @@ export const localStore = {
         sejour_id: sejour.id,
         montant: supp,
         mode_paiement: payload.mode_paiement || "Espèces",
-        reference: "Règlement départ",
+        reference: sejour.type_sejour === "passage" ? "Règlement sortie passage" : "Règlement départ",
         date_paiement: new Date().toISOString(),
+        local_only: sejour.local_only || false,
       });
     }
     if (room) {
       room.statut = room.panne_note ? "maintenance" : "nettoyage";
     }
     saveDb(db);
-    return { sejour, chambre_numero: room?.numero };
+    return { sejour, chambre_numero: room?.numero || sejour.chambre_numero };
   },
 
   extendStay(sejourId, payload) {
@@ -409,11 +558,23 @@ export const localStore = {
       const room = db.chambres.find(
         (r) => Number(r.id) === Number(sejour?.chambre_id || resa?.chambre_id)
       );
+      const isPassage = sejour?.type_sejour === "passage" || String(sejour?.numero || "").startsWith("PAS-");
       return {
         ...p,
-        client_label: client ? `${client.nom} ${client.prenoms}`.trim() : resa?.nom_client || "",
-        chambre_numero: room?.numero || "",
-        origine: sejour ? `Séjour ${sejour.numero}` : resa ? "Réservation" : "Paiement",
+        type_sejour: isPassage ? "passage" : sejour ? "nuitee" : resa ? "reservation" : "autre",
+        type_climatisation: sejour?.type_climatisation || null,
+        duree_heures: sejour?.duree_heures || null,
+        client_label: client
+          ? `${client.nom} ${client.prenoms}`.trim()
+          : sejour
+            ? `${sejour.client_nom || ""} ${sejour.client_prenoms || ""}`.trim()
+            : resa?.nom_client || "",
+        chambre_numero: room?.numero || sejour?.chambre_numero || "",
+        origine: sejour
+          ? `${isPassage ? "Passage" : "Séjour"} ${sejour.numero}`
+          : resa
+            ? "Réservation"
+            : "Paiement",
       };
     });
   },

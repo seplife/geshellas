@@ -8,15 +8,19 @@ import Spinner from "./components/ui/Spinner.jsx";
 import ConfirmModal from "./components/ui/ConfirmModal.jsx";
 import DashboardPage from "./pages/DashboardPage.jsx";
 import RoomsPage from "./pages/RoomsPage.jsx";
+import PassagesPage from "./pages/PassagesPage.jsx";
 import ClientsPage from "./pages/ClientsPage.jsx";
 import ReservationsPage from "./pages/ReservationsPage.jsx";
 import PaymentsPage from "./pages/PaymentsPage.jsx";
+import FinancialReportPage from "./pages/FinancialReportPage.jsx";
 import NotificationsPage from "./pages/NotificationsPage.jsx";
 import SettingsPage from "./pages/SettingsPage.jsx";
 import UsersPage from "./pages/UsersPage.jsx";
 import CheckInModal from "./pages/modals/CheckInModal.jsx";
+import PassageModal from "./pages/modals/PassageModal.jsx";
 import CheckOutModal from "./pages/modals/CheckOutModal.jsx";
 import ExtendModal from "./pages/modals/ExtendModal.jsx";
+import ExtendPassageModal from "./pages/modals/ExtendPassageModal.jsx";
 import PayModal from "./pages/modals/PayModal.jsx";
 import MaintenanceModal from "./pages/modals/MaintenanceModal.jsx";
 import ReservationModal from "./pages/modals/ReservationModal.jsx";
@@ -27,11 +31,33 @@ import ClientDetailModal from "./pages/modals/ClientDetailModal.jsx";
 import { NAV_BY_ROLE, NAV_ITEMS } from "./constants.js";
 import { todayStr } from "./lib/format.js";
 import { getDashboard } from "./services/dashboard.js";
-import { listRooms, validerNettoyage, signalerAnomalie, subscribeHotel, createRoom, updateRoom, deleteRoom } from "./services/rooms.js";
+import {
+  listRooms,
+  validerNettoyage,
+  signalerAnomalie,
+  subscribeHotel,
+  createRoom,
+  updateRoom,
+  deleteRoom,
+} from "./services/rooms.js";
 import { listClients } from "./services/clients.js";
-import { listStays, checkIn, checkOut, extendStay } from "./services/stays.js";
-import { listReservations, createReservation, cancelReservation, markReservationAbsent } from "./services/reservations.js";
+import {
+  listStays,
+  listPassages,
+  createPassage,
+  extendPassage,
+  checkIn,
+  checkOut,
+  extendStay,
+} from "./services/stays.js";
+import {
+  listReservations,
+  createReservation,
+  cancelReservation,
+  markReservationAbsent,
+} from "./services/reservations.js";
 import { listPayments, recordPayment } from "./services/payments.js";
+import { getMonthlyFinancialReport } from "./services/reports.js";
 import { listNotifications, retryNotification } from "./services/notifications.js";
 import { getSettings, updateSettings } from "./services/settings.js";
 import { listUsers, createUser, setUserActive, setUserRole } from "./services/users.js";
@@ -40,9 +66,11 @@ import { listUsers, createUser, setUserActive, setUserRole } from "./services/us
 const TAB_RESOURCES = {
   dashboard: ["dashboard"],
   rooms: ["rooms", "stays", "reservations"],
+  passages: ["passages", "rooms"],
   reservations: ["reservations", "rooms"],
   clients: ["clients"],
   payments: ["payments"],
+  reports: ["reports"],
   notifications: ["notifications"],
   users: ["users"],
   settings: ["settings"],
@@ -57,6 +85,7 @@ export default function App() {
   const { session, profile, loading, logout } = useAuth();
   const { showToast, showError } = useToast();
 
+  const now = new Date();
   const [tab, setTabState] = useState(initialTab);
   const [navOpen, setNavOpen] = useState(false);
   const [modal, setModal] = useState(null);
@@ -65,8 +94,18 @@ export default function App() {
   const [errors, setErrors] = useState({});
   const [pending, setPending] = useState(0);
   const [live, setLive] = useState(false);
+  const [reportPeriod, setReportPeriod] = useState({
+    year: now.getFullYear(),
+    month: now.getMonth() + 1,
+  });
 
-  const params = useRef({ clients: "", paymentsSince: null, paymentsPeriod: "tout" });
+  const params = useRef({
+    clients: "",
+    paymentsSince: null,
+    paymentsPeriod: "tout",
+    reportYear: now.getFullYear(),
+    reportMonth: now.getMonth() + 1,
+  });
   const tabRef = useRef(tab);
   tabRef.current = tab;
 
@@ -86,9 +125,15 @@ export default function App() {
     dashboard: () => getDashboard(),
     rooms: () => listRooms(),
     stays: () => listStays({ statut: "en_cours" }),
+    passages: () => listPassages(),
     reservations: () => listReservations(),
     clients: () => listClients(params.current.clients),
     payments: () => listPayments({ since: params.current.paymentsSince }),
+    reports: () =>
+      getMonthlyFinancialReport({
+        year: params.current.reportYear,
+        month: params.current.reportMonth,
+      }),
     notifications: () => listNotifications(),
     users: () => listUsers(),
     settings: () => getSettings(),
@@ -172,12 +217,26 @@ export default function App() {
     setModal({ type: "confirm", title, message, action, successMsg, ...opts });
 
   const dashboard = data.dashboard;
-  const badges = { reservations: dashboard?.arrivees_prevues?.length || 0 };
+  const activePassagesCount = (data.passages || []).filter(
+    (p) => p.statut === "en_cours"
+  ).length;
+  const badges = {
+    reservations: dashboard?.arrivees_prevues?.length || 0,
+    passages: activePassagesCount,
+  };
   const errorFor = (...keys) => keys.map((k) => errors[k]).find(Boolean);
 
   return (
     <div className="w-full min-h-screen flex">
-      <Sidebar role={role} tab={tab} onSelect={setTab} open={navOpen} onClose={() => setNavOpen(false)} live={live} badges={badges} />
+      <Sidebar
+        role={role}
+        tab={tab}
+        onSelect={setTab}
+        open={navOpen}
+        onClose={() => setNavOpen(false)}
+        live={live}
+        badges={badges}
+      />
 
       <div className="flex-1 min-w-0 flex flex-col">
         <Topbar
@@ -206,20 +265,34 @@ export default function App() {
               onRetry={() => reloadTab("rooms")}
               role={role}
               onCheckIn={(room) => {
-                // Chambre réservée : le check-in se fait au titre de sa réservation du jour.
                 const today = todayStr();
                 const reservation =
                   room.statut === "reservee"
                     ? data.reservations?.find(
-                        (r) => r.chambre_id === room.id && ["en_attente", "confirmee"].includes(r.statut) && r.date_arrivee <= today && r.date_depart > today
+                        (r) =>
+                          r.chambre_id === room.id &&
+                          ["en_attente", "confirmee"].includes(r.statut) &&
+                          r.date_arrivee <= today &&
+                          r.date_depart > today
                       )
                     : undefined;
                 setModal({ type: "checkin", room, reservation });
               }}
+              onPassage={(room) => setModal({ type: "passage", room })}
               onCheckOut={(stay) => setModal({ type: "checkout", stay })}
-              onExtend={(stay) => setModal({ type: "extend", stay })}
+              onExtend={(stay) =>
+                setModal({
+                  type: stay.type_sejour === "passage" ? "extend-passage" : "extend",
+                  stay,
+                })
+              }
               onPay={(stay) => setModal({ type: "pay", stay })}
-              onClean={(room) => runAction(() => validerNettoyage(room.id), `Chambre ${room.numero} remise en service.`)}
+              onClean={(room) =>
+                runAction(
+                  () => validerNettoyage(room.id),
+                  `Chambre ${room.numero} remise en service.`
+                )
+              }
               onMaintenance={(room) => setModal({ type: "maintenance", room })}
               onCreateRoom={() => setModal({ type: "room" })}
               onEditRoom={(room) => setModal({ type: "room", room })}
@@ -232,6 +305,19 @@ export default function App() {
                   { danger: true, confirmLabel: "Supprimer la chambre" }
                 )
               }
+            />
+          )}
+          {tab === "passages" && canSee("passages") && (
+            <PassagesPage
+              passages={data.passages}
+              rooms={data.rooms || []}
+              error={errorFor("passages", "rooms")}
+              onRetry={() => reloadTab("passages")}
+              role={role}
+              onNewPassage={(room) => setModal({ type: "passage", room })}
+              onExtendPassage={(stay) => setModal({ type: "extend-passage", stay })}
+              onPayPassage={(stay) => setModal({ type: "pay", stay })}
+              onCheckOutPassage={(stay) => setModal({ type: "checkout", stay })}
             />
           )}
           {tab === "reservations" && canSee("reservations") && (
@@ -290,13 +376,30 @@ export default function App() {
               }}
             />
           )}
+          {tab === "reports" && canSee("reports") && (
+            <FinancialReportPage
+              report={data.reports}
+              error={errors.reports}
+              onRetry={() => load("reports")}
+              selectedYear={reportPeriod.year}
+              selectedMonth={reportPeriod.month}
+              onChangePeriod={(year, month) => {
+                params.current.reportYear = year;
+                params.current.reportMonth = month;
+                setReportPeriod({ year, month });
+                load("reports");
+              }}
+            />
+          )}
           {tab === "notifications" && canSee("notifications") && (
             <NotificationsPage
               notifications={data.notifications}
               error={errors.notifications}
               onRetry={() => load("notifications")}
               role={role}
-              onResend={(id) => runAction(() => retryNotification(id), "Notification renvoyée.")}
+              onResend={(id) =>
+                runAction(() => retryNotification(id), "Notification renvoyée.")
+              }
             />
           )}
           {tab === "users" && canSee("users") && (
@@ -317,7 +420,9 @@ export default function App() {
                     )
                   : runAction(() => setUserActive(u.id, true), "Compte activé.")
               }
-              onChangeRole={(id, newRole) => runAction(() => setUserRole(id, newRole), "Rôle mis à jour.")}
+              onChangeRole={(id, newRole) =>
+                runAction(() => setUserRole(id, newRole), "Rôle mis à jour.")
+              }
             />
           )}
           {tab === "settings" && canSee("settings") && (
@@ -326,7 +431,9 @@ export default function App() {
               error={errors.settings}
               onRetry={() => load("settings")}
               submitting={submitting}
-              onSave={(v) => runAction(() => updateSettings(v), "Paramètres enregistrés.")}
+              onSave={(v) =>
+                runAction(() => updateSettings(v), "Paramètres enregistrés.")
+              }
             />
           )}
         </main>
@@ -340,7 +447,28 @@ export default function App() {
           submitting={submitting}
           onClose={closeModal}
           onSubmit={(payload) =>
-            runAction(() => checkIn(payload), `Check-in enregistré — chambre ${modal.room.numero} occupée.`)
+            runAction(
+              () => checkIn(payload),
+              `Check-in enregistré — chambre ${modal.room?.numero || ""} occupée.`
+            )
+          }
+        />
+      )}
+      {modal?.type === "passage" && (
+        <PassageModal
+          room={modal.room}
+          rooms={data.rooms || []}
+          submitting={submitting}
+          onClose={closeModal}
+          onSubmit={(payload) =>
+            runAction(
+              () => createPassage(payload),
+              `Passage enregistré (${payload.duree_heures}h — ${
+                payload.type_climatisation === "ventilee"
+                  ? "Chambre ventilée 2 000 FCFA/h"
+                  : "Chambre climatisée 2 500 FCFA/h"
+              }).`
+            )
           }
         />
       )}
@@ -349,7 +477,9 @@ export default function App() {
           stay={modal.stay}
           submitting={submitting}
           onClose={closeModal}
-          onSubmit={(id, payload) => runAction(() => checkOut(id, payload), "Check-out effectué.")}
+          onSubmit={(id, payload) =>
+            runAction(() => checkOut(id, payload), "Sortie enregistrée.")
+          }
         />
       )}
       {modal?.type === "extend" && (
@@ -357,7 +487,22 @@ export default function App() {
           stay={modal.stay}
           submitting={submitting}
           onClose={closeModal}
-          onSubmit={(id, payload) => runAction(() => extendStay(id, payload), "Séjour prolongé.")}
+          onSubmit={(id, payload) =>
+            runAction(() => extendStay(id, payload), "Séjour prolongé.")
+          }
+        />
+      )}
+      {modal?.type === "extend-passage" && (
+        <ExtendPassageModal
+          stay={modal.stay}
+          submitting={submitting}
+          onClose={closeModal}
+          onSubmit={(id, payload) =>
+            runAction(
+              () => extendPassage(id, payload),
+              `Passage prolongé de +${payload.heures_supplementaires}h.`
+            )
+          }
         />
       )}
       {modal?.type === "pay" && (
@@ -365,7 +510,9 @@ export default function App() {
           stay={modal.stay}
           submitting={submitting}
           onClose={closeModal}
-          onSubmit={(payload) => runAction(() => recordPayment(payload), "Paiement enregistré.")}
+          onSubmit={(payload) =>
+            runAction(() => recordPayment(payload), "Paiement enregistré.")
+          }
         />
       )}
       {modal?.type === "maintenance" && (
@@ -373,7 +520,12 @@ export default function App() {
           room={modal.room}
           submitting={submitting}
           onClose={closeModal}
-          onSubmit={(roomId, description) => runAction(() => signalerAnomalie(roomId, description), "Anomalie signalée.")}
+          onSubmit={(roomId, description) =>
+            runAction(
+              () => signalerAnomalie(roomId, description),
+              "Anomalie signalée."
+            )
+          }
         />
       )}
       {modal?.type === "reservation" && (
@@ -381,14 +533,18 @@ export default function App() {
           rooms={data.rooms || []}
           submitting={submitting}
           onClose={closeModal}
-          onSubmit={(payload) => runAction(() => createReservation(payload), "Réservation créée.")}
+          onSubmit={(payload) =>
+            runAction(() => createReservation(payload), "Réservation créée.")
+          }
         />
       )}
       {modal?.type === "user" && (
         <NewUserModal
           submitting={submitting}
           onClose={closeModal}
-          onSubmit={(payload) => runAction(() => createUser(payload), "Compte créé.")}
+          onSubmit={(payload) =>
+            runAction(() => createUser(payload), "Compte créé.")
+          }
         />
       )}
       {modal?.type === "room" && (
@@ -398,13 +554,18 @@ export default function App() {
           onClose={closeModal}
           onSubmit={(values) =>
             runAction(
-              () => (modal.room ? updateRoom(modal.room.id, values) : createRoom(values)),
+              () =>
+                modal.room
+                  ? updateRoom(modal.room.id, values)
+                  : createRoom(values),
               modal.room ? "Chambre mise à jour." : "Chambre créée."
             )
           }
         />
       )}
-      {modal?.type === "client" && <ClientDetailModal client={modal.client} onClose={closeModal} />}
+      {modal?.type === "client" && (
+        <ClientDetailModal client={modal.client} onClose={closeModal} />
+      )}
       {modal?.type === "confirm" && (
         <ConfirmModal
           title={modal.title}

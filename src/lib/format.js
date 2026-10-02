@@ -75,3 +75,25 @@ export function nightsBetween(d1, d2) {
 export function fullName(p) {
   return [p?.nom, p?.prenoms].filter(Boolean).join(" ");
 }
+
+/** Ajoute un nombre d'heures à une date (AAAA-MM-JJ) et une heure (HH:MM). */
+export function addHoursToDateTime(dateStr, timeStr, hours) {
+  const baseDate = dateStr || todayStr();
+  const baseTime = fmtTime(timeStr) || nowTime();
+  const [y, m, d] = baseDate.split("-").map(Number);
+  const [hh, mm] = baseTime.split(":").map(Number);
+  const dt = new Date(y, (m || 1) - 1, d || 1, (hh || 0) + Number(hours || 1), mm || 0);
+  return {
+    date: toDateStr(dt),
+    time: `${pad(dt.getHours())}:${pad(dt.getMinutes())}`,
+  };
+}
+
+export const MONTH_NAMES = [
+  "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+  "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre",
+];
+
+export function fmtMonthYear(year, month) {
+  return `${MONTH_NAMES[(Number(month) || 1) - 1] || ""} ${year}`;
+}
