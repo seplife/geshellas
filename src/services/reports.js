@@ -65,76 +65,191 @@ export async function getMonthlyFinancialReport({ year, month } = {}) {
   }));
   const roomMap = new Map(rooms.map((r) => [Number(r.id), r]));
 
+  const { patches: sejourPatches, deletedIds: deletedSejourIds } =
+    localStore.getSejourOverrides();
+  const { patches: clientPatches, deletedIds: deletedClientIds } =
+    localStore.getClientOverrides();
+
   // Séjours (Supabase + localStore)
-  const remoteStays = (stayRes.data || []).map((s) => {
-    const room = roomMap.get(Number(s.chambre_id)) || s.chambres;
-    const isPassage = s.type_sejour === "passage" || String(s.numero || "").startsWith("PAS-");
-    const clim = s.type_climatisation || getRoomClimatisation(room);
-    const tarif = isPassage ? Number(s.tarif_horaire) || getPassageHoraire(clim) : null;
-    const duree = isPassage
-      ? Number(s.duree_heures) || Math.max(1, Math.round(Number(s.montant_total || 0) / (tarif || 2500)))
-      : null;
-    return {
-      ...s,
-      type_sejour: isPassage ? "passage" : "nuitee",
-      type_climatisation: isPassage ? clim : null,
-      tarif_horaire: tarif,
-      duree_heures: duree,
-      chambre_numero: room?.numero || s.chambres?.numero || "",
-      client_nom: s.clients?.nom || (isPassage ? "Client" : ""),
-      client_prenoms: s.clients?.prenoms || (isPassage ? "de passage" : ""),
-    };
-  });
+  const remoteStays = (stayRes.data || [])
+    .filter(
+      (s) =>
+        !deletedSejourIds.includes(Number(s.id)) &&
+        !deletedClientIds.includes(Number(s.client_id))
+    )
+    .map((raw) => {
+      const sPatch = sejourPatches[String(raw.id)] || {};
+      const cPatch = raw.client_id ? clientPatches[String(raw.client_id)] || {} : {};
+      const s = { ...raw, ...sPatch };
+      const room = roomMap.get(Number(s.chambre_id)) || raw.chambres;
+      const isPassage =
+        s.type_sejour === "passage" ||
+        sPatch.type_climatisation !== undefined ||
+        String(s.numero || "").startsWith("PAS-");
+      const clim = s.type_climatisation || getRoomClimatisation(room);
+      const tarif = isPassage ? Number(s.tarif_horaire) || getPassageHoraire(clim) : null;
+      const duree = isPassage
+        ? Number(s.duree_heures) ||
+          Math.max(1, Math.round(Number(s.montant_total || 0) / (tarif || 2500)))
+        : null;
+      return {
+        ...s,
+        type_sejour: isPassage ? "passage" : "nuitee",
+        type_climatisation: isPassage ? clim : null,
+        tarif_horaire: tarif,
+        duree_heures: duree,
+        chambre_numero:
+          sPatch.chambre_numero || room?.numero || raw.chambres?.numero || "",
+        client_nom:
+          cPatch.nom || sPatch.client_nom || raw.clients?.nom || (isPassage ? "Client" : ""),
+        client_prenoms:
+          cPatch.prenoms ||
+          sPatch.client_prenoms ||
+          raw.clients?.prenoms ||
+          (isPassage ? "de passage" : ""),
+      };
+    });
 
   const localStays = localStore
     .listStays()
-    .filter((ls) => ls.local_only && !remoteStays.some((rs) => rs.numero === ls.numero));
+    .filter(
+      (ls) =>
+        ls.local_only &&
+        !deletedSejourIds.includes(Number(ls.id)) &&
+        !deletedClientIds.includes(Number(ls.client_id)) &&
+        !remoteStays.some((rs) => rs.numero === ls.numero)
+    );
   const allStays = [...localStays, ...remoteStays];
   const stayMap = new Map(allStays.map((s) => [Number(s.id), s]));
 
+  const seenPatchedSejours = new Set();
+
   // Paiements (Supabase + localStore)
-  const remotePayments = (payRes.data || []).map((p) => {
-    const sejour = p.sejours || stayMap.get(Number(p.sejour_id));
-    const resa = p.reservations;
-    const room =
-      roomMap.get(Number(sejour?.chambre_id || resa?.chambre_id)) ||
-      sejour?.chambres ||
-      resa?.chambres;
+  const remotePayments = (payRes.data || [])
+    .filter((p) => {
+      const sid = Number(p.sejour_id || p.sejours?.id || 0);
+      const sejour = stayMap.get(sid) || p.sejours;
+      const cid = Number(sejour?.client_id || 0);
+      if (sid && deletedSejourIds.includes(sid)) return false;
+      if (cid && deletedClientIds.includes(cid)) return false;
+      const sPatch = sid ? sejourPatches[String(sid)] : null;
+      if (sPatch) {
+        if (sPatch.montant_paye !== undefined && Number(sPatch.montant_paye) <= 0) {
+          return false;
+        }
+        if (seenPatchedSejours.has(sid)) {
+          return false;
+        }
+        seenPatchedSejours.add(sid);
+      }
+      return true;
+    })
+    .map((p) => {
+      const sid = Number(p.sejour_id || p.sejours?.id || 0);
+      const sPatch = sid ? sejourPatches[String(sid)] || {} : {};
+      const sejour = stayMap.get(sid) || (p.sejours ? { ...p.sejours, ...sPatch } : null);
+      const cid = Number(sejour?.client_id || 0);
+      const cPatch = cid ? clientPatches[String(cid)] || {} : {};
+      const resa = p.reservations;
+      const room =
+        roomMap.get(Number(sejour?.chambre_id || resa?.chambre_id)) ||
+        sejour?.chambres ||
+        resa?.chambres;
 
-    const isPassage =
-      sejour?.type_sejour === "passage" ||
-      String(sejour?.numero || "").startsWith("PAS-") ||
-      /passage/i.test(p.reference || "");
+      const isPassage =
+        sejour?.type_sejour === "passage" ||
+        sPatch.type_climatisation !== undefined ||
+        String(sejour?.numero || "").startsWith("PAS-") ||
+        /passage/i.test(p.reference || "");
 
-    const clim = isPassage
-      ? sejour?.type_climatisation ||
-        (/ventil/i.test(p.reference || "") ? "ventilee" : getRoomClimatisation(room))
-      : null;
+      const clim = isPassage
+        ? sPatch.type_climatisation ||
+          sejour?.type_climatisation ||
+          (/ventil/i.test(p.reference || "") ? "ventilee" : getRoomClimatisation(room))
+        : null;
 
-    const clientLabel = sejour?.clients
-      ? `${sejour.clients.nom} ${sejour.clients.prenoms}`.trim()
-      : sejour?.client_nom
-        ? `${sejour.client_nom} ${sejour.client_prenoms || ""}`.trim()
-        : resa?.nom_client || (isPassage ? "Client de passage" : "");
+      const clientLabel =
+        cPatch.nom || cPatch.prenoms
+          ? `${cPatch.nom || sejour?.client_nom || sejour?.clients?.nom || ""} ${
+              cPatch.prenoms || sejour?.client_prenoms || sejour?.clients?.prenoms || ""
+            }`.trim()
+          : sPatch.client_nom || sPatch.client_prenoms
+            ? `${sPatch.client_nom || sejour?.client_nom || sejour?.clients?.nom || ""} ${
+                sPatch.client_prenoms || sejour?.client_prenoms || sejour?.clients?.prenoms || ""
+              }`.trim()
+            : sejour?.client_nom
+              ? `${sejour.client_nom} ${sejour.client_prenoms || ""}`.trim()
+              : sejour?.clients
+                ? `${sejour.clients.nom} ${sejour.clients.prenoms}`.trim()
+                : resa?.nom_client || (isPassage ? "Client de passage" : "");
 
-    const chambreNumero = room?.numero || sejour?.chambre_numero || "";
-    const origine = sejour?.numero
-      ? `${isPassage ? "Passage" : "Séjour"} ${sejour.numero}`
-      : resa
-        ? "Réservation"
-        : "Paiement";
+      const chambreNumero =
+        sPatch.chambre_numero || room?.numero || sejour?.chambre_numero || "";
+      const origine = sejour?.numero
+        ? `${isPassage ? "Passage" : "Séjour"} ${sejour.numero}`
+        : resa
+          ? "Réservation"
+          : "Paiement";
 
-    return {
-      ...p,
-      type_sejour: isPassage ? "passage" : sejour ? "nuitee" : resa ? "reservation" : "autre",
-      type_climatisation: clim,
-      chambre_id: Number(sejour?.chambre_id || resa?.chambre_id || room?.id || 0) || null,
-      chambre_numero: chambreNumero,
-      client_label: clientLabel,
-      origine,
-      parsedDate: getLocalYearMonth(p.date_paiement),
-    };
-  });
+      return {
+        ...p,
+        montant:
+          sPatch.montant_paye !== undefined
+            ? Number(sPatch.montant_paye)
+            : Number(p.montant),
+        mode_paiement: sPatch.mode_paiement || p.mode_paiement,
+        reference: sPatch.reference || p.reference,
+        type_sejour: isPassage
+          ? "passage"
+          : sejour
+            ? "nuitee"
+            : resa
+              ? "reservation"
+              : "autre",
+        type_climatisation: clim,
+        chambre_id: Number(sejour?.chambre_id || resa?.chambre_id || room?.id || 0) || null,
+        chambre_numero: chambreNumero,
+        client_label: clientLabel,
+        origine,
+        parsedDate: getLocalYearMonth(p.date_paiement),
+      };
+    });
+
+  // Ajouter les éventuels paiements créés lors de la modification d'un passage qui n'avait aucun paiement initial
+  for (const [sidStr, sPatch] of Object.entries(sejourPatches)) {
+    const sid = Number(sidStr);
+    if (
+      !deletedSejourIds.includes(sid) &&
+      !seenPatchedSejours.has(sid) &&
+      Number(sPatch.montant_paye) > 0
+    ) {
+      const sejour = stayMap.get(sid);
+      if (sejour && !sejour.local_only && !deletedClientIds.includes(Number(sejour.client_id))) {
+        const payDate = sPatch.updated_at || sejour.created_at || sejour.date_entree;
+        remotePayments.push({
+          id: `patch-${sid}`,
+          sejour_id: sid,
+          montant: Number(sPatch.montant_paye),
+          mode_paiement: sPatch.mode_paiement || "Espèces",
+          reference:
+            sPatch.reference ||
+            `Passage ${sejour.duree_heures || 1}h (${
+              sejour.type_climatisation === "ventilee" ? "Ventilée" : "Climatisée"
+            })`,
+          date_paiement: payDate,
+          type_sejour: sejour.type_sejour || "passage",
+          type_climatisation: sejour.type_climatisation || "climatisee",
+          chambre_id: Number(sejour.chambre_id) || null,
+          chambre_numero: sejour.chambre_numero || "",
+          client_label: `${sejour.client_nom || "Client"} ${
+            sejour.client_prenoms || "de passage"
+          }`.trim(),
+          origine: `Passage ${sejour.numero}`,
+          parsedDate: getLocalYearMonth(payDate),
+        });
+      }
+    }
+  }
 
   const localPayments = localStore
     .listPayments()

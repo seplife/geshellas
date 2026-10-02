@@ -395,23 +395,29 @@ begin
   where id = p_sejour_id
   returning * into v_sejour;
 
-  -- Ajuster le paiement associé si le montant payé a changé
-  if v_diff_paye <> 0 then
-    if exists (select 1 from paiements where sejour_id = p_sejour_id) then
-      update paiements
-      set montant = greatest(0, montant + v_diff_paye),
-          mode_paiement = coalesce(nullif(p_passage->>'mode_paiement', ''), mode_paiement)
-      where id = (select id from paiements where sejour_id = p_sejour_id order by date_paiement desc limit 1);
-    elsif v_montant_paye > 0 then
-      insert into paiements (sejour_id, montant, mode_paiement, reference, utilisateur_id)
-      values (
-        p_sejour_id,
-        v_montant_paye,
-        coalesce(nullif(p_passage->>'mode_paiement', ''), 'Espèces'),
-        'Passage ' || v_heures || 'h (' || case when v_clim = 'ventilee' then 'Ventilée' else 'Climatisée' end || ')',
-        auth.uid()
-      );
-    end if;
+  -- Synchroniser les paiements associés au passage (montant, mode, référence ou suppression si 0)
+  if v_montant_paye <= 0 then
+    delete from paiements where sejour_id = p_sejour_id;
+  elsif exists (select 1 from paiements where sejour_id = p_sejour_id) then
+    -- Conserver l'encaissement principal et supprimer les éventuels doublons pour que le total corresponde exactement
+    delete from paiements
+    where sejour_id = p_sejour_id
+      and id <> (select id from paiements where sejour_id = p_sejour_id order by date_paiement asc, id asc limit 1);
+
+    update paiements
+    set montant = v_montant_paye,
+        mode_paiement = coalesce(nullif(p_passage->>'mode_paiement', ''), mode_paiement),
+        reference = 'Passage ' || v_heures || 'h (' || case when v_clim = 'ventilee' then 'Ventilée' else 'Climatisée' end || ')'
+    where sejour_id = p_sejour_id;
+  else
+    insert into paiements (sejour_id, montant, mode_paiement, reference, utilisateur_id)
+    values (
+      p_sejour_id,
+      v_montant_paye,
+      coalesce(nullif(p_passage->>'mode_paiement', ''), 'Espèces'),
+      'Passage ' || v_heures || 'h (' || case when v_clim = 'ventilee' then 'Ventilée' else 'Climatisée' end || ')',
+      auth.uid()
+    );
   end if;
 
   return to_jsonb(v_sejour);
@@ -491,6 +497,8 @@ language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  r_sejour record;
 begin
   perform public.require_role('admin', 'gerant', 'reception');
 
@@ -498,9 +506,14 @@ begin
     raise exception 'Client introuvable.' using errcode = 'P0002';
   end if;
 
-  if exists (select 1 from sejours where client_id = p_id and statut = 'en_cours') then
-    raise exception 'Impossible de supprimer ce client car il a un séjour ou passage actuellement en cours.' using errcode = '23514';
-  end if;
+  -- Libérer les chambres des éventuels séjours/passages en cours de ce client
+  for r_sejour in
+    select id, chambre_id from sejours where client_id = p_id and statut = 'en_cours'
+  loop
+    update sejours set statut = 'annule' where id = r_sejour.id;
+    update chambres set statut = public.statut_disponible(r_sejour.chambre_id)
+    where id = r_sejour.chambre_id and statut = 'occupee';
+  end loop;
 
   update reservations set client_id = null where client_id = p_id;
   delete from paiements where sejour_id in (select id from sejours where client_id = p_id);

@@ -159,12 +159,23 @@ export const localStore = {
   // --- Séjours & Passages ---
   listStays({ statut, type_sejour } = {}) {
     const db = loadDb();
-    let list = [...db.sejours];
+    const deletedSejourIds = db.deleted_sejour_ids || [];
+    const deletedClientIds = db.deleted_client_ids || [];
+    const clientPatches = db.client_patches || {};
+    const sejourPatches = db.sejour_patches || {};
+
+    let list = db.sejours.filter(
+      (s) =>
+        !deletedSejourIds.includes(Number(s.id)) &&
+        !deletedClientIds.includes(Number(s.client_id))
+    );
     if (statut) list = list.filter((s) => s.statut === statut);
     if (type_sejour) {
       list = list.filter((s) => (s.type_sejour || (String(s.numero).startsWith("PAS-") ? "passage" : "nuitee")) === type_sejour);
     }
-    return list.map((s) => {
+    return list.map((raw) => {
+      const s = { ...raw, ...(sejourPatches[String(raw.id)] || {}) };
+      const cPatch = clientPatches[String(s.client_id)] || {};
       const c = db.clients.find((x) => Number(x.id) === Number(s.client_id));
       const r = db.chambres.find((x) => Number(x.id) === Number(s.chambre_id));
       const isPassage = s.type_sejour === "passage" || String(s.numero || "").startsWith("PAS-");
@@ -174,9 +185,9 @@ export const localStore = {
         type_sejour: isPassage ? "passage" : "nuitee",
         type_climatisation: isPassage ? clim : s.type_climatisation,
         tarif_horaire: isPassage ? (Number(s.tarif_horaire) || (clim === "ventilee" ? 2000 : 2500)) : null,
-        client_nom: c?.nom || s.client_nom || (isPassage ? "Client" : ""),
-        client_prenoms: c?.prenoms || s.client_prenoms || (isPassage ? "de passage" : ""),
-        client_telephone: c?.telephone || s.client_telephone || "",
+        client_nom: cPatch.nom || c?.nom || s.client_nom || (isPassage ? "Client" : ""),
+        client_prenoms: cPatch.prenoms || c?.prenoms || s.client_prenoms || (isPassage ? "de passage" : ""),
+        client_telephone: cPatch.telephone || c?.telephone || s.client_telephone || "",
         chambre_numero: r?.numero || s.chambre_numero || "",
         prix_nuit: r?.prix_nuit || s.prix_nuit || 0,
       };
@@ -262,6 +273,7 @@ export const localStore = {
       montant_total: montantTotal,
       montant_paye: montantPaye,
       solde: montantTotal - montantPaye,
+      mode_paiement: payload.mode_paiement || "Espèces",
       local_only: true,
       created_at: new Date().toISOString(),
     };
@@ -347,6 +359,8 @@ export const localStore = {
       payload.heure_sortie_prevue ||
       `${pad2(outDt.getHours())}:${pad2(outDt.getMinutes())}`;
 
+    const refLabel = `Passage ${dureeHeures}h (${clim === "ventilee" ? "Ventilée" : "Climatisée"})`;
+
     const sejour = db.sejours.find((s) => Number(s.id) === Number(sejourId));
     if (sejour) {
       const oldRoomId = sejour.chambre_id;
@@ -371,6 +385,7 @@ export const localStore = {
       sejour.montant_total = montantTotal;
       sejour.montant_paye = montantPaye;
       sejour.solde = montantTotal - montantPaye;
+      if (payload.mode_paiement) sejour.mode_paiement = payload.mode_paiement;
       if (cData.nom) sejour.client_nom = cData.nom.trim();
       if (cData.prenoms) sejour.client_prenoms = cData.prenoms.trim();
       if (cData.telephone) sejour.client_telephone = cData.telephone.trim();
@@ -384,21 +399,31 @@ export const localStore = {
         if (cData.numero_piece) client.numero_piece = cData.numero_piece.trim();
       }
 
-      const pay = db.paiements.find((p) => Number(p.sejour_id) === Number(sejour.id));
-      if (pay) {
-        pay.montant = montantPaye;
-        if (payload.mode_paiement) pay.mode_paiement = payload.mode_paiement;
-        pay.reference = `Passage ${dureeHeures}h (${clim === "ventilee" ? "Ventilée" : "Climatisée"})`;
-      } else if (montantPaye > 0) {
-        db.paiements.unshift({
-          id: nextId(db.paiements),
-          sejour_id: sejour.id,
-          montant: montantPaye,
-          mode_paiement: payload.mode_paiement || "Espèces",
-          reference: `Passage ${dureeHeures}h (${clim === "ventilee" ? "Ventilée" : "Climatisée"})`,
-          date_paiement: new Date().toISOString(),
-          local_only: true,
-        });
+      if (montantPaye <= 0) {
+        db.paiements = db.paiements.filter((p) => Number(p.sejour_id) !== Number(sejour.id));
+      } else {
+        const existingPays = db.paiements.filter((p) => Number(p.sejour_id) === Number(sejour.id));
+        if (existingPays.length > 0) {
+          const primary = existingPays[0];
+          primary.montant = montantPaye;
+          if (payload.mode_paiement) primary.mode_paiement = payload.mode_paiement;
+          primary.reference = refLabel;
+          // Supprimer d'éventuels paiements secondaires de ce passage pour éviter tout doublon sur le total
+          const keepId = primary.id;
+          db.paiements = db.paiements.filter(
+            (p) => Number(p.sejour_id) !== Number(sejour.id) || p.id === keepId
+          );
+        } else {
+          db.paiements.unshift({
+            id: nextId(db.paiements),
+            sejour_id: sejour.id,
+            montant: montantPaye,
+            mode_paiement: payload.mode_paiement || "Espèces",
+            reference: refLabel,
+            date_paiement: new Date().toISOString(),
+            local_only: true,
+          });
+        }
       }
       saveDb(db);
       return sejour;
@@ -420,12 +445,23 @@ export const localStore = {
       montant_total: montantTotal,
       montant_paye: montantPaye,
       solde: montantTotal - montantPaye,
+      mode_paiement: payload.mode_paiement || "Espèces",
+      reference: refLabel,
       client_nom: cData.nom ? cData.nom.trim() : undefined,
       client_prenoms: cData.prenoms ? cData.prenoms.trim() : undefined,
       client_telephone: cData.telephone ? cData.telephone.trim() : undefined,
+      updated_at: new Date().toISOString(),
     };
     saveDb(db);
     return db.sejour_patches[String(sejourId)];
+  },
+
+  clearSejourPatch(sejourId) {
+    const db = loadDb();
+    if (db.sejour_patches && db.sejour_patches[String(sejourId)]) {
+      delete db.sejour_patches[String(sejourId)];
+      saveDb(db);
+    }
   },
 
   deletePassage(sejourId) {
@@ -437,7 +473,10 @@ export const localStore = {
         if (room && room.statut === "occupee") room.statut = "libre";
       }
       db.sejours = db.sejours.filter((s) => Number(s.id) !== Number(sejourId));
-      db.paiements = db.paiements.filter((p) => Number(p.sejour_id) !== Number(sejourId));
+    }
+    db.paiements = db.paiements.filter((p) => Number(p.sejour_id) !== Number(sejourId));
+    if (db.sejour_patches && db.sejour_patches[String(sejourId)]) {
+      delete db.sejour_patches[String(sejourId)];
     }
     db.deleted_sejour_ids = db.deleted_sejour_ids || [];
     if (!db.deleted_sejour_ids.includes(Number(sejourId))) {
@@ -669,13 +708,20 @@ export const localStore = {
     const db = loadDb();
     const client = db.clients.find((c) => Number(c.id) === Number(id));
     if (!client) throw new Error("Client introuvable.");
+    const deletedSejourIds = db.deleted_sejour_ids || [];
+    const sejourPatches = db.sejour_patches || {};
     const sejours = db.sejours
-      .filter((s) => Number(s.client_id) === Number(id))
-      .map((s) => {
+      .filter(
+        (s) =>
+          Number(s.client_id) === Number(id) &&
+          !deletedSejourIds.includes(Number(s.id))
+      )
+      .map((raw) => {
+        const s = { ...raw, ...(sejourPatches[String(raw.id)] || {}) };
         const room = db.chambres.find((r) => Number(r.id) === Number(s.chambre_id));
         return { ...s, chambre_numero: room?.numero || s.chambre_numero || "" };
       });
-    return { ...client, sejours };
+    return { ...client, ...(db.client_patches?.[String(id)] || {}), sejours };
   },
 
   updateClient(id, patch) {
@@ -697,24 +743,60 @@ export const localStore = {
     if (idx !== -1) {
       db.clients[idx] = { ...db.clients[idx], ...cleaned };
     }
+    // Mettre à jour le cache nom/prénoms/téléphone sur les séjours/passages locaux de ce client
+    for (const s of db.sejours) {
+      if (Number(s.client_id) === Number(id)) {
+        if (cleaned.nom) s.client_nom = cleaned.nom;
+        if (cleaned.prenoms) s.client_prenoms = cleaned.prenoms;
+        if (cleaned.telephone) s.client_telephone = cleaned.telephone;
+      }
+    }
     db.client_patches = db.client_patches || {};
     db.client_patches[String(id)] = cleaned;
     saveDb(db);
     return idx !== -1 ? db.clients[idx] : { id: Number(id), ...cleaned };
   },
 
-  deleteClient(id) {
+  deleteClient(id, extraSejourIds = []) {
     const db = loadDb();
-    const hasActive = db.sejours.some(
-      (s) => Number(s.client_id) === Number(id) && s.statut === "en_cours"
-    );
-    if (hasActive) {
-      throw new Error(
-        "Impossible de supprimer ce client car il a un séjour ou passage actuellement en cours."
-      );
+    const clientStays = db.sejours.filter((s) => Number(s.client_id) === Number(id));
+    // Libérer les chambres éventuellement occupées par ce client
+    for (const s of clientStays) {
+      if (s.statut === "en_cours") {
+        const room = db.chambres.find((r) => Number(r.id) === Number(s.chambre_id));
+        if (room && room.statut === "occupee") room.statut = "libre";
+      }
     }
+    const sejourIdsToDelete = [
+      ...new Set([
+        ...clientStays.map((s) => Number(s.id)),
+        ...(extraSejourIds || []).map((sid) => Number(sid)),
+      ]),
+    ].filter(Boolean);
+
     db.clients = db.clients.filter((c) => Number(c.id) !== Number(id));
-    db.sejours = db.sejours.filter((s) => Number(s.client_id) !== Number(id));
+    db.sejours = db.sejours.filter(
+      (s) =>
+        Number(s.client_id) !== Number(id) &&
+        !sejourIdsToDelete.includes(Number(s.id))
+    );
+    db.paiements = db.paiements.filter(
+      (p) => !sejourIdsToDelete.includes(Number(p.sejour_id))
+    );
+
+    db.deleted_sejour_ids = db.deleted_sejour_ids || [];
+    for (const sid of sejourIdsToDelete) {
+      if (!db.deleted_sejour_ids.includes(Number(sid))) {
+        db.deleted_sejour_ids.push(Number(sid));
+      }
+      if (db.sejour_patches && db.sejour_patches[String(sid)]) {
+        delete db.sejour_patches[String(sid)];
+      }
+    }
+
+    if (db.client_patches && db.client_patches[String(id)]) {
+      delete db.client_patches[String(id)];
+    }
     db.deleted_client_ids = db.deleted_client_ids || [];
     if (!db.deleted_client_ids.includes(Number(id))) {
       db.deleted_client_ids.push(Number(id));
@@ -733,27 +815,70 @@ export const localStore = {
   // --- Paiements ---
   listPayments({ since } = {}) {
     const db = loadDb();
-    let list = [...db.paiements];
-    if (since) list = list.filter((p) => p.date_paiement >= since);
-    return list.map((p) => {
+    const deletedSejourIds = db.deleted_sejour_ids || [];
+    const deletedClientIds = db.deleted_client_ids || [];
+    const sejourPatches = db.sejour_patches || {};
+    const clientPatches = db.client_patches || {};
+
+    let list = db.paiements.filter((p) => {
+      if (p.sejour_id && deletedSejourIds.includes(Number(p.sejour_id))) {
+        return false;
+      }
       const sejour = db.sejours.find((s) => Number(s.id) === Number(p.sejour_id));
+      if (sejour && deletedClientIds.includes(Number(sejour.client_id))) {
+        return false;
+      }
+      const sPatch = p.sejour_id ? sejourPatches[String(p.sejour_id)] : null;
+      if (sPatch && sPatch.montant_paye !== undefined && Number(sPatch.montant_paye) <= 0) {
+        return false;
+      }
+      return true;
+    });
+
+    if (since) list = list.filter((p) => p.date_paiement >= since);
+
+    return list.map((p) => {
+      const rawSejour = db.sejours.find((s) => Number(s.id) === Number(p.sejour_id));
+      const sPatch = p.sejour_id ? sejourPatches[String(p.sejour_id)] || {} : {};
+      const sejour = rawSejour ? { ...rawSejour, ...sPatch } : null;
       const resa = db.reservations.find((r) => Number(r.id) === Number(p.reservation_id));
-      const client = sejour ? db.clients.find((c) => Number(c.id) === Number(sejour.client_id)) : null;
+      const rawClient = sejour
+        ? db.clients.find((c) => Number(c.id) === Number(sejour.client_id))
+        : null;
+      const cPatch = sejour?.client_id ? clientPatches[String(sejour.client_id)] || {} : {};
+      const client = rawClient ? { ...rawClient, ...cPatch } : null;
       const room = db.chambres.find(
         (r) => Number(r.id) === Number(sejour?.chambre_id || resa?.chambre_id)
       );
-      const isPassage = sejour?.type_sejour === "passage" || String(sejour?.numero || "").startsWith("PAS-");
+      const isPassage =
+        sejour?.type_sejour === "passage" || String(sejour?.numero || "").startsWith("PAS-");
+      const clientLabel =
+        cPatch.nom || cPatch.prenoms
+          ? `${cPatch.nom || client?.nom || sejour?.client_nom || ""} ${
+              cPatch.prenoms || client?.prenoms || sejour?.client_prenoms || ""
+            }`.trim()
+          : sPatch.client_nom || sPatch.client_prenoms
+            ? `${sPatch.client_nom || client?.nom || sejour?.client_nom || ""} ${
+                sPatch.client_prenoms || client?.prenoms || sejour?.client_prenoms || ""
+              }`.trim()
+            : client
+              ? `${client.nom} ${client.prenoms}`.trim()
+              : sejour
+                ? `${sejour.client_nom || ""} ${sejour.client_prenoms || ""}`.trim()
+                : resa?.nom_client || "";
+
       return {
         ...p,
+        montant:
+          sPatch.montant_paye !== undefined ? Number(sPatch.montant_paye) : Number(p.montant),
+        mode_paiement: sPatch.mode_paiement || p.mode_paiement,
+        reference: sPatch.reference || p.reference,
         type_sejour: isPassage ? "passage" : sejour ? "nuitee" : resa ? "reservation" : "autre",
         type_climatisation: sejour?.type_climatisation || null,
         duree_heures: sejour?.duree_heures || null,
-        client_label: client
-          ? `${client.nom} ${client.prenoms}`.trim()
-          : sejour
-            ? `${sejour.client_nom || ""} ${sejour.client_prenoms || ""}`.trim()
-            : resa?.nom_client || "",
-        chambre_numero: room?.numero || sejour?.chambre_numero || "",
+        client_label: clientLabel,
+        chambre_numero:
+          sPatch.chambre_numero || room?.numero || sejour?.chambre_numero || "",
         origine: sejour
           ? `${isPassage ? "Passage" : "Séjour"} ${sejour.numero}`
           : resa
@@ -792,15 +917,16 @@ export const localStore = {
     const countBy = (st) => chambres.filter((c) => c.statut === st).length;
     const occupees = countBy("occupee");
     const activeStays = this.listStays({ statut: "en_cours" });
+    const allPayments = this.listPayments();
 
-    const recettesJour = db.paiements
+    const recettesJour = allPayments
       .filter((p) => (p.date_paiement || "").slice(0, 10) === today)
       .reduce((acc, p) => acc + Number(p.montant || 0), 0);
 
     const recettes7j = [];
     for (let i = 6; i >= 0; i--) {
       const d = addDays(today, -i);
-      const m = db.paiements
+      const m = allPayments
         .filter((p) => (p.date_paiement || "").slice(0, 10) === d)
         .reduce((acc, p) => acc + Number(p.montant || 0), 0);
       recettes7j.push({ jour: d, montant: m });
@@ -816,7 +942,7 @@ export const localStore = {
       taux_occupation: total > 0 ? Math.round((occupees / total) * 100) : 0,
       clients_presents: activeStays.reduce((a, s) => a + (Number(s.nb_personnes) || 1), 0),
       sejours_en_cours: activeStays.length,
-      arrivees_jour: db.sejours.filter((s) => s.date_entree === today).length,
+      arrivees_jour: this.listStays().filter((s) => s.date_entree === today).length,
       departs_jour: activeStays.filter((s) => s.date_sortie_prevue === today).length,
       sejours_en_retard: activeStays.filter((s) => s.date_sortie_prevue < today),
       departs_prevus: activeStays.filter((s) => s.date_sortie_prevue === today),

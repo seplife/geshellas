@@ -30,11 +30,18 @@ export async function listStays({ statut, type_sejour } = {}) {
   if (error) raise(error);
 
   const { patches, deletedIds } = localStore.getSejourOverrides();
+  const { patches: clientPatches, deletedIds: deletedClientIds } =
+    localStore.getClientOverrides();
 
   const remoteList = (data || [])
-    .filter((s) => !deletedIds.includes(Number(s.id)))
+    .filter(
+      (s) =>
+        !deletedIds.includes(Number(s.id)) &&
+        !deletedClientIds.includes(Number(s.client_id))
+    )
     .map((s) => {
       const patch = patches[String(s.id)] || {};
+      const cPatch = s.client_id ? clientPatches[String(s.client_id)] || {} : {};
       const merged = { ...s, ...patch };
       const isPassage =
         merged.type_sejour === "passage" || String(merged.numero || "").startsWith("PAS-");
@@ -50,10 +57,15 @@ export async function listStays({ statut, type_sejour } = {}) {
           ? Number(merged.duree_heures) ||
             Math.max(1, Math.round(Number(merged.montant_total || 0) / getPassageHoraire(clim)))
           : null,
-        client_nom: patch.client_nom || s.clients?.nom || (isPassage ? "Client" : ""),
+        client_nom:
+          cPatch.nom || patch.client_nom || s.clients?.nom || (isPassage ? "Client" : ""),
         client_prenoms:
-          patch.client_prenoms || s.clients?.prenoms || (isPassage ? "de passage" : ""),
-        client_telephone: patch.client_telephone || s.clients?.telephone || "",
+          cPatch.prenoms ||
+          patch.client_prenoms ||
+          s.clients?.prenoms ||
+          (isPassage ? "de passage" : ""),
+        client_telephone:
+          cPatch.telephone || patch.client_telephone || s.clients?.telephone || "",
         chambre_numero: patch.chambre_numero || s.chambres?.numero || "",
         prix_nuit: s.chambres?.prix_nuit || 0,
       };
@@ -66,6 +78,7 @@ export async function listStays({ statut, type_sejour } = {}) {
       (ls) =>
         ls.local_only &&
         !deletedIds.includes(Number(ls.id)) &&
+        !deletedClientIds.includes(Number(ls.client_id)) &&
         !remoteList.some((rs) => rs.numero === ls.numero)
     );
 
@@ -131,6 +144,8 @@ export async function updatePassage(sejourId, payload) {
     }
     raise(error);
   }
+  // Enregistrer également le patch local pour refléter immédiatement la modification sur Paiements et Rapport financier
+  localStore.updatePassage(sejourId, payload);
   return data;
 }
 
@@ -153,6 +168,7 @@ export async function deletePassage(sejourId) {
     }
     raise(error);
   }
+  localStore.deletePassage(sejourId);
 }
 
 export async function extendPassage(sejourId, payload = {}) {

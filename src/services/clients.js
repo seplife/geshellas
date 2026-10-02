@@ -79,17 +79,22 @@ export async function getClient(id) {
     .order("date_entree", { ascending: false });
   if (sErr) raise(sErr);
 
-  const { deletedIds: deletedSejourIds } = localStore.getSejourOverrides();
+  const { patches: sejourPatches, deletedIds: deletedSejourIds } =
+    localStore.getSejourOverrides();
 
   return {
     ...client,
     ...(patches[String(id)] || {}),
     sejours: (sejours || [])
       .filter((s) => !deletedSejourIds.includes(Number(s.id)))
-      .map((s) => ({
-        ...s,
-        chambre_numero: s.chambres?.numero || "",
-      })),
+      .map((s) => {
+        const sp = sejourPatches[String(s.id)] || {};
+        return {
+          ...s,
+          ...sp,
+          chambre_numero: sp.chambre_numero || s.chambres?.numero || "",
+        };
+      }),
   };
 }
 
@@ -110,14 +115,28 @@ export async function updateClient(id, patch) {
 }
 
 export async function deleteClient(id) {
+  // Récupérer les séjours/passages associés à ce client afin d'exclure immédiatement leurs paiements
+  let remoteSejourIds = [];
+  try {
+    const { data: sList } = await supabase
+      .from("sejours")
+      .select("id")
+      .eq("client_id", id);
+    if (Array.isArray(sList)) {
+      remoteSejourIds = sList.map((s) => Number(s.id));
+    }
+  } catch {
+    /* ignore */
+  }
+
   const { error } = await supabase.rpc("delete_client", { p_id: id });
 
   if (error) {
     if (isMissingRpc(error)) {
-      localStore.deleteClient(id);
+      localStore.deleteClient(id, remoteSejourIds);
       return;
     }
     raise(error);
   }
-  localStore.deleteClient(id);
+  localStore.deleteClient(id, remoteSejourIds);
 }

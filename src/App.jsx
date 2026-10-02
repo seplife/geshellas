@@ -200,15 +200,25 @@ export default function App() {
   const canSee = (t) => NAV_BY_ROLE[role]?.includes(t);
   const closeModal = () => setModal(null);
 
-  /** Exécute une action, affiche le résultat et rafraîchit les données visibles. */
+  /** Exécute une action, affiche le résultat et rafraîchit toutes les vues impactées (dont Paiements et Rapport financier). */
   const runAction = async (fn, successMsg) => {
     setSubmitting(true);
     try {
       await fn();
       if (successMsg) showToast(successMsg);
       setModal(null);
-      reloadTab();
-      if (tab !== "dashboard") load("dashboard");
+
+      const keysToReload = new Set([
+        ...(TAB_RESOURCES[tabRef.current] || []),
+        "dashboard",
+      ]);
+      if (canSee("payments")) keysToReload.add("payments");
+      if (canSee("reports")) keysToReload.add("reports");
+      if (canSee("passages")) keysToReload.add("passages");
+      for (const k of ["rooms", "stays", "clients"]) {
+        if (data[k] !== undefined) keysToReload.add(k);
+      }
+      await Promise.all([...keysToReload].map(load));
     } catch (err) {
       showError(err);
     } finally {
@@ -222,18 +232,18 @@ export default function App() {
   const handleDeletePassage = (p) =>
     confirm(
       `Supprimer le passage ${p.numero} ?`,
-      `Le passage ${p.numero} (chambre ${p.chambre_numero}) ainsi que son encaissement associé seront définitivement supprimés.`,
+      `Le passage ${p.numero} (chambre ${p.chambre_numero}) ainsi que son encaissement associé seront définitivement supprimés des Paiements et du Rapport financier.`,
       () => deletePassage(p.id),
-      `Passage ${p.numero} supprimé.`,
+      `Passage ${p.numero} supprimé — Paiements et Rapport financier actualisés.`,
       { danger: true, confirmLabel: "Supprimer le passage" }
     );
 
   const handleDeleteClient = (c) =>
     confirm(
       `Supprimer le client ${c.nom} ${c.prenoms} ?`,
-      `La fiche de ${c.nom} ${c.prenoms} et son historique associé seront définitivement supprimés.`,
+      `La fiche de ${c.nom} ${c.prenoms}, ses séjours/passages et ses paiements associés seront supprimés. Les Paiements et le Rapport financier seront actualisés.`,
       () => deleteClient(c.id),
-      `Client ${c.nom} ${c.prenoms} supprimé.`,
+      `Client ${c.nom} ${c.prenoms} supprimé — Paiements et Rapport financier actualisés.`,
       { danger: true, confirmLabel: "Supprimer le client" }
     );
 
