@@ -11,7 +11,11 @@ function notifyAsync(body) {
 
 function isMissingRpc(error) {
   const msg = error?.message || "";
-  return error?.code === "PGRST202" || /schema cache|create_passage|extend_passage/i.test(msg);
+  return (
+    error?.code === "PGRST202" ||
+    error?.code === "42501" ||
+    /schema cache|create_passage|extend_passage|update_passage|delete_passage/i.test(msg)
+  );
 }
 
 export async function listStays({ statut, type_sejour } = {}) {
@@ -25,27 +29,45 @@ export async function listStays({ statut, type_sejour } = {}) {
   const { data, error } = await query;
   if (error) raise(error);
 
-  const remoteList = (data || []).map((s) => {
-    const isPassage = s.type_sejour === "passage" || String(s.numero || "").startsWith("PAS-");
-    const clim = s.type_climatisation || getRoomClimatisation(s.chambres);
-    return {
-      ...s,
-      type_sejour: isPassage ? "passage" : "nuitee",
-      type_climatisation: isPassage ? clim : s.type_climatisation || null,
-      tarif_horaire: isPassage ? Number(s.tarif_horaire) || getPassageHoraire(clim) : null,
-      duree_heures: isPassage ? Number(s.duree_heures) || Math.max(1, Math.round(Number(s.montant_total || 0) / getPassageHoraire(clim))) : null,
-      client_nom: s.clients?.nom || (isPassage ? "Client" : ""),
-      client_prenoms: s.clients?.prenoms || (isPassage ? "de passage" : ""),
-      client_telephone: s.clients?.telephone || "",
-      chambre_numero: s.chambres?.numero || "",
-      prix_nuit: s.chambres?.prix_nuit || 0,
-    };
-  });
+  const { patches, deletedIds } = localStore.getSejourOverrides();
+
+  const remoteList = (data || [])
+    .filter((s) => !deletedIds.includes(Number(s.id)))
+    .map((s) => {
+      const patch = patches[String(s.id)] || {};
+      const merged = { ...s, ...patch };
+      const isPassage =
+        merged.type_sejour === "passage" || String(merged.numero || "").startsWith("PAS-");
+      const clim = merged.type_climatisation || getRoomClimatisation(s.chambres);
+      return {
+        ...merged,
+        type_sejour: isPassage ? "passage" : "nuitee",
+        type_climatisation: isPassage ? clim : merged.type_climatisation || null,
+        tarif_horaire: isPassage
+          ? Number(merged.tarif_horaire) || getPassageHoraire(clim)
+          : null,
+        duree_heures: isPassage
+          ? Number(merged.duree_heures) ||
+            Math.max(1, Math.round(Number(merged.montant_total || 0) / getPassageHoraire(clim)))
+          : null,
+        client_nom: patch.client_nom || s.clients?.nom || (isPassage ? "Client" : ""),
+        client_prenoms:
+          patch.client_prenoms || s.clients?.prenoms || (isPassage ? "de passage" : ""),
+        client_telephone: patch.client_telephone || s.clients?.telephone || "",
+        chambre_numero: patch.chambre_numero || s.chambres?.numero || "",
+        prix_nuit: s.chambres?.prix_nuit || 0,
+      };
+    });
 
   // Fusionner les éventuels passages enregistrés en local (repli si migration 0005 non encore jouée)
   const localOnly = localStore
     .listStays({ statut })
-    .filter((ls) => ls.local_only && !remoteList.some((rs) => rs.numero === ls.numero));
+    .filter(
+      (ls) =>
+        ls.local_only &&
+        !deletedIds.includes(Number(ls.id)) &&
+        !remoteList.some((rs) => rs.numero === ls.numero)
+    );
 
   let merged = [...localOnly, ...remoteList];
   if (type_sejour) {
@@ -64,7 +86,9 @@ export async function createPassage(payload) {
   const tarif = clim === "ventilee" ? 2000 : 2500;
   const total = duree * tarif;
   const paye =
-    payload.montant_paye !== undefined && payload.montant_paye !== null && payload.montant_paye !== ""
+    payload.montant_paye !== undefined &&
+    payload.montant_paye !== null &&
+    payload.montant_paye !== ""
       ? Number(payload.montant_paye)
       : total;
 
@@ -87,6 +111,48 @@ export async function createPassage(payload) {
     raise(error);
   }
   return data;
+}
+
+export async function updatePassage(sejourId, payload) {
+  const localList = localStore.listStays();
+  const isLocal = localList.some((s) => s.local_only && Number(s.id) === Number(sejourId));
+  if (isLocal) {
+    return localStore.updatePassage(sejourId, payload);
+  }
+
+  const { data, error } = await supabase.rpc("update_passage", {
+    p_sejour_id: sejourId,
+    p_passage: payload,
+  });
+
+  if (error) {
+    if (isMissingRpc(error)) {
+      return localStore.updatePassage(sejourId, payload);
+    }
+    raise(error);
+  }
+  return data;
+}
+
+export async function deletePassage(sejourId) {
+  const localList = localStore.listStays();
+  const isLocal = localList.some((s) => s.local_only && Number(s.id) === Number(sejourId));
+  if (isLocal) {
+    localStore.deletePassage(sejourId);
+    return;
+  }
+
+  const { error } = await supabase.rpc("delete_passage", {
+    p_sejour_id: sejourId,
+  });
+
+  if (error) {
+    if (isMissingRpc(error)) {
+      localStore.deletePassage(sejourId);
+      return;
+    }
+    raise(error);
+  }
 }
 
 export async function extendPassage(sejourId, payload = {}) {

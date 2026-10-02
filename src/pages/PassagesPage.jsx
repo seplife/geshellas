@@ -9,6 +9,8 @@ import {
   Wallet,
   CalendarPlus,
   AlarmClock,
+  Pencil,
+  Trash2,
 } from "lucide-react";
 import StatCard from "../components/ui/StatCard.jsx";
 import Button from "../components/ui/Button.jsx";
@@ -38,6 +40,8 @@ export default function PassagesPage({
   onRetry,
   role,
   onNewPassage,
+  onEditPassage,
+  onDeletePassage,
   onExtendPassage,
   onPayPassage,
   onCheckOutPassage,
@@ -84,7 +88,8 @@ export default function PassagesPage({
     () =>
       list.filter((p) => {
         if (filterStatut !== "tous" && p.statut !== filterStatut) return false;
-        const clim = p.type_climatisation === "ventilee" ? "ventilee" : "climatisee";
+        const clim =
+          p.type_climatisation === "ventilee" ? "ventilee" : "climatisee";
         if (filterClim !== "tous" && clim !== filterClim) return false;
         if (!term) return true;
         return [
@@ -101,7 +106,10 @@ export default function PassagesPage({
   const isPassageLate = (p) => {
     if (p.statut !== "en_cours") return false;
     if (p.date_sortie_prevue < today) return true;
-    if (p.date_sortie_prevue === today && fmtTime(p.heure_sortie_prevue) < currentTime) {
+    if (
+      p.date_sortie_prevue === today &&
+      fmtTime(p.heure_sortie_prevue) < currentTime
+    ) {
       return true;
     }
     return false;
@@ -159,7 +167,9 @@ export default function PassagesPage({
       {canOperate && freeRooms.length > 0 && (
         <div className="card p-4 flex flex-col gap-3">
           <div className="flex items-center justify-between gap-2">
-            <h2 className="section-title">Démarrer un passage rapide — Chambres disponibles</h2>
+            <h2 className="section-title">
+              Démarrer un passage rapide — Chambres disponibles
+            </h2>
             <span className="text-xs text-stone-500">
               Cliquez sur une chambre pour lancer un passage
             </span>
@@ -220,13 +230,37 @@ export default function PassagesPage({
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1.5">
                         <h3 className="text-lg font-semibold font-display">
                           Chambre {p.chambre_numero}
                         </h3>
                         <Pill tone={isVent ? "ochre" : "blue"}>
-                          {isVent ? "Ventilée · 2 000 F/h" : "Climatisée · 2 500 F/h"}
+                          {isVent
+                            ? "Ventilée · 2 000 F/h"
+                            : "Climatisée · 2 500 F/h"}
                         </Pill>
+                        {canOperate && (
+                          <>
+                            <button
+                              type="button"
+                              className="btn-icon h-7 w-7"
+                              onClick={() => onEditPassage(p)}
+                              title={`Modifier le passage ${p.numero}`}
+                              aria-label={`Modifier le passage ${p.numero}`}
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              className="btn-icon h-7 w-7 text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-500/10"
+                              onClick={() => onDeletePassage(p)}
+                              title={`Supprimer le passage ${p.numero}`}
+                              aria-label={`Supprimer le passage ${p.numero}`}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </>
+                        )}
                       </div>
                       <div className="text-xs text-stone-500 mt-0.5">
                         {p.numero} · {p.client_nom} {p.client_prenoms}
@@ -241,13 +275,15 @@ export default function PassagesPage({
                     <div className="flex justify-between">
                       <span className="text-stone-500">Horaire</span>
                       <span className="font-medium text-stone-800 dark:text-stone-100">
-                        {fmtTime(p.heure_entree)} → {fmtTime(p.heure_sortie_prevue)}
+                        {fmtTime(p.heure_entree)} →{" "}
+                        {fmtTime(p.heure_sortie_prevue)}
                       </span>
                     </div>
                     {late && (
                       <div className="flex items-center gap-1.5 text-rose-600 dark:text-rose-300 font-medium">
                         <AlarmClock className="h-3.5 w-3.5" />
-                        Sortie prévue à {fmtTime(p.heure_sortie_prevue)} dépassée
+                        Sortie prévue à {fmtTime(p.heure_sortie_prevue)}{" "}
+                        dépassée
                       </div>
                     )}
                     <div className="flex justify-between">
@@ -282,6 +318,14 @@ export default function PassagesPage({
                       >
                         + Heure(s)
                       </Button>
+                      <Button
+                        size="sm"
+                        variant="subtle"
+                        icon={Pencil}
+                        onClick={() => onEditPassage(p)}
+                      >
+                        Modifier
+                      </Button>
                       {Number(p.solde) > 0 && (
                         <Button
                           size="sm"
@@ -299,6 +343,15 @@ export default function PassagesPage({
                         onClick={() => onCheckOutPassage(p)}
                       >
                         Sortie
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        icon={Trash2}
+                        className="text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-500/10"
+                        onClick={() => onDeletePassage(p)}
+                      >
+                        Supprimer
                       </Button>
                     </div>
                   )}
@@ -330,7 +383,9 @@ export default function PassagesPage({
               {st.label} <span className="opacity-70">{st.count}</span>
             </button>
           ))}
-          <span className="hidden sm:inline text-stone-300 dark:text-brand-700 self-center">|</span>
+          <span className="hidden sm:inline text-stone-300 dark:text-brand-700 self-center">
+            |
+          </span>
           {[
             { key: "tous", label: "Tous types" },
             { key: "ventilee", label: "Ventilée (2 000 F/h)" },
@@ -398,7 +453,8 @@ export default function PassagesPage({
             <tbody>
               {filtered.map((p) => {
                 const isVent = p.type_climatisation === "ventilee";
-                const tarif = Number(p.tarif_horaire) || (isVent ? 2000 : 2500);
+                const tarif =
+                  Number(p.tarif_horaire) || (isVent ? 2000 : 2500);
                 const duree = Number(p.duree_heures) || 1;
                 return (
                   <tr key={p.id}>
@@ -410,7 +466,9 @@ export default function PassagesPage({
                     </td>
                     <td className="whitespace-nowrap">
                       <Pill tone={isVent ? "ochre" : "blue"}>
-                        {isVent ? "Ventilée · 2 000 F/h" : "Climatisée · 2 500 F/h"}
+                        {isVent
+                          ? "Ventilée · 2 000 F/h"
+                          : "Climatisée · 2 500 F/h"}
                       </Pill>
                     </td>
                     <td>
@@ -421,7 +479,10 @@ export default function PassagesPage({
                       {fmtTime(p.heure_sortie_reelle || p.heure_sortie_prevue)}
                     </td>
                     <td className="whitespace-nowrap font-medium">
-                      {duree} h <span className="text-xs text-stone-400">({fmtFCFA(tarif)}/h)</span>
+                      {duree} h{" "}
+                      <span className="text-xs text-stone-400">
+                        ({fmtFCFA(tarif)}/h)
+                      </span>
                     </td>
                     <td className="text-right font-semibold tabular-nums whitespace-nowrap">
                       {fmtFCFA(p.montant_total)}
@@ -444,26 +505,45 @@ export default function PassagesPage({
                     </td>
                     {canOperate && (
                       <td className="text-right whitespace-nowrap">
-                        {p.statut === "en_cours" ? (
-                          <div className="inline-flex gap-1.5 justify-end">
-                            <Button
-                              size="sm"
-                              variant="subtle"
-                              onClick={() => onExtendPassage(p)}
-                            >
-                              +1h
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="danger"
-                              onClick={() => onCheckOutPassage(p)}
-                            >
-                              Sortie
-                            </Button>
-                          </div>
-                        ) : (
-                          <span className="text-xs text-stone-400">Clôturé</span>
-                        )}
+                        <div className="inline-flex items-center gap-1.5 justify-end">
+                          {p.statut === "en_cours" && (
+                            <>
+                              <Button
+                                size="sm"
+                                variant="subtle"
+                                onClick={() => onExtendPassage(p)}
+                              >
+                                +1h
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="danger"
+                                onClick={() => onCheckOutPassage(p)}
+                              >
+                                Sortie
+                              </Button>
+                            </>
+                          )}
+                          <Button
+                            size="sm"
+                            variant="subtle"
+                            icon={Pencil}
+                            onClick={() => onEditPassage(p)}
+                            title={`Modifier le passage ${p.numero}`}
+                          >
+                            Modifier
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            icon={Trash2}
+                            className="text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-500/10"
+                            onClick={() => onDeletePassage(p)}
+                            title={`Supprimer le passage ${p.numero}`}
+                          >
+                            Supprimer
+                          </Button>
+                        </div>
                       </td>
                     )}
                   </tr>

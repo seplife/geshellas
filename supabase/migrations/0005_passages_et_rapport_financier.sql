@@ -315,7 +315,202 @@ begin
 end;
 $$;
 
--- 6. Autoriser aussi le rôle gérant sur check_in, check_out, extend_stay, record_payment
+-- 6. Modification et suppression d'un passage
+create or replace function public.update_passage(
+  p_sejour_id bigint,
+  p_passage jsonb
+) returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_sejour sejours%rowtype;
+  v_old_chambre_id bigint;
+  v_new_chambre_id bigint;
+  v_clim text;
+  v_tarif numeric;
+  v_heures int;
+  v_date_entree date;
+  v_heure_entree time;
+  v_sortie_ts timestamp;
+  v_montant_total numeric;
+  v_montant_paye numeric;
+  v_diff_paye numeric;
+  v_client jsonb := coalesce(p_passage->'client', '{}'::jsonb);
+begin
+  perform public.require_role('admin', 'gerant', 'reception');
+
+  select * into v_sejour from sejours where id = p_sejour_id for update;
+  if not found then
+    raise exception 'Passage introuvable.' using errcode = 'P0002';
+  end if;
+
+  v_old_chambre_id := v_sejour.chambre_id;
+  v_new_chambre_id := coalesce(nullif(p_passage->>'chambre_id', '')::bigint, v_sejour.chambre_id);
+  v_clim := case
+    when lower(coalesce(p_passage->>'type_climatisation', v_sejour.type_climatisation, 'climatisee')) = 'ventilee'
+    then 'ventilee'
+    else 'climatisee'
+  end;
+  v_tarif := case when v_clim = 'ventilee' then 2000 else 2500 end;
+  v_heures := greatest(1, coalesce(nullif(p_passage->>'duree_heures', '')::int, v_sejour.duree_heures, 1));
+  v_date_entree := coalesce(nullif(p_passage->>'date_entree', '')::date, v_sejour.date_entree);
+  v_heure_entree := coalesce(nullif(p_passage->>'heure_entree', '')::time, v_sejour.heure_entree);
+  v_sortie_ts := (v_date_entree + v_heure_entree) + make_interval(hours => v_heures);
+  v_montant_total := v_heures * v_tarif;
+  v_montant_paye := greatest(0, coalesce(nullif(p_passage->>'montant_paye', '')::numeric, v_sejour.montant_paye));
+  v_diff_paye := v_montant_paye - v_sejour.montant_paye;
+
+  -- Si changement de chambre sur un passage en cours
+  if v_new_chambre_id <> v_old_chambre_id and v_sejour.statut = 'en_cours' then
+    update chambres set statut = 'libre' where id = v_old_chambre_id;
+    update chambres set statut = 'occupee' where id = v_new_chambre_id;
+  end if;
+
+  -- Mise à jour éventuelle du client associé
+  if v_sejour.client_id is not null and (v_client ? 'nom' or v_client ? 'prenoms' or v_client ? 'telephone') then
+    update clients set
+      nom = coalesce(nullif(trim(v_client->>'nom'), ''), nom),
+      prenoms = coalesce(nullif(trim(v_client->>'prenoms'), ''), prenoms),
+      telephone = coalesce(nullif(trim(v_client->>'telephone'), ''), telephone),
+      type_piece = coalesce(nullif(trim(v_client->>'type_piece'), ''), type_piece),
+      numero_piece = coalesce(nullif(trim(v_client->>'numero_piece'), ''), numero_piece)
+    where id = v_sejour.client_id;
+  end if;
+
+  update sejours set
+    chambre_id = v_new_chambre_id,
+    type_climatisation = v_clim,
+    tarif_horaire = v_tarif,
+    duree_heures = v_heures,
+    date_entree = v_date_entree,
+    heure_entree = v_heure_entree,
+    date_sortie_prevue = v_sortie_ts::date,
+    heure_sortie_prevue = v_sortie_ts::time(0),
+    nb_personnes = greatest(1, coalesce(nullif(p_passage->>'nb_personnes', '')::int, nb_personnes)),
+    montant_total = v_montant_total,
+    montant_paye = v_montant_paye,
+    solde = v_montant_total - v_montant_paye
+  where id = p_sejour_id
+  returning * into v_sejour;
+
+  -- Ajuster le paiement associé si le montant payé a changé
+  if v_diff_paye <> 0 then
+    if exists (select 1 from paiements where sejour_id = p_sejour_id) then
+      update paiements
+      set montant = greatest(0, montant + v_diff_paye),
+          mode_paiement = coalesce(nullif(p_passage->>'mode_paiement', ''), mode_paiement)
+      where id = (select id from paiements where sejour_id = p_sejour_id order by date_paiement desc limit 1);
+    elsif v_montant_paye > 0 then
+      insert into paiements (sejour_id, montant, mode_paiement, reference, utilisateur_id)
+      values (
+        p_sejour_id,
+        v_montant_paye,
+        coalesce(nullif(p_passage->>'mode_paiement', ''), 'Espèces'),
+        'Passage ' || v_heures || 'h (' || case when v_clim = 'ventilee' then 'Ventilée' else 'Climatisée' end || ')',
+        auth.uid()
+      );
+    end if;
+  end if;
+
+  return to_jsonb(v_sejour);
+end;
+$$;
+
+create or replace function public.delete_passage(p_sejour_id bigint)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_sejour sejours%rowtype;
+begin
+  perform public.require_role('admin', 'gerant', 'reception');
+
+  select * into v_sejour from sejours where id = p_sejour_id for update;
+  if not found then
+    raise exception 'Passage introuvable.' using errcode = 'P0002';
+  end if;
+
+  delete from paiements where sejour_id = p_sejour_id;
+  delete from notifications where sejour_id = p_sejour_id;
+  delete from sejours where id = p_sejour_id;
+
+  -- Si le passage était en cours, remettre la chambre en statut disponible
+  if v_sejour.statut = 'en_cours' then
+    update chambres set statut = public.statut_disponible(v_sejour.chambre_id)
+    where id = v_sejour.chambre_id and statut = 'occupee';
+  end if;
+end;
+$$;
+
+-- 7. Modification et suppression d'un client
+create or replace function public.update_client(
+  p_id bigint,
+  p_client jsonb
+) returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_client clients%rowtype;
+  v_nom text := nullif(trim(coalesce(p_client->>'nom', '')), '');
+  v_prenoms text := nullif(trim(coalesce(p_client->>'prenoms', '')), '');
+  v_tel text := nullif(trim(coalesce(p_client->>'telephone', '')), '');
+begin
+  perform public.require_role('admin', 'gerant', 'reception');
+
+  update clients set
+    nom = coalesce(v_nom, nom),
+    prenoms = coalesce(v_prenoms, prenoms),
+    sexe = coalesce(nullif(trim(p_client->>'sexe'), ''), sexe),
+    telephone = coalesce(v_tel, telephone),
+    whatsapp = case when p_client ? 'whatsapp' then nullif(trim(p_client->>'whatsapp'), '') else whatsapp end,
+    email = case when p_client ? 'email' then nullif(trim(p_client->>'email'), '') else email end,
+    nationalite = case when p_client ? 'nationalite' then nullif(trim(p_client->>'nationalite'), '') else nationalite end,
+    profession = case when p_client ? 'profession' then nullif(trim(p_client->>'profession'), '') else profession end,
+    adresse = case when p_client ? 'adresse' then nullif(trim(p_client->>'adresse'), '') else adresse end,
+    type_piece = coalesce(nullif(trim(p_client->>'type_piece'), ''), type_piece),
+    numero_piece = coalesce(nullif(trim(p_client->>'numero_piece'), ''), numero_piece)
+  where id = p_id
+  returning * into v_client;
+
+  if not found then
+    raise exception 'Client introuvable.' using errcode = 'P0002';
+  end if;
+  return to_jsonb(v_client);
+end;
+$$;
+
+create or replace function public.delete_client(p_id bigint)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  perform public.require_role('admin', 'gerant', 'reception');
+
+  if not exists (select 1 from clients where id = p_id) then
+    raise exception 'Client introuvable.' using errcode = 'P0002';
+  end if;
+
+  if exists (select 1 from sejours where client_id = p_id and statut = 'en_cours') then
+    raise exception 'Impossible de supprimer ce client car il a un séjour ou passage actuellement en cours.' using errcode = '23514';
+  end if;
+
+  update reservations set client_id = null where client_id = p_id;
+  delete from paiements where sejour_id in (select id from sejours where client_id = p_id);
+  delete from notifications where sejour_id in (select id from sejours where client_id = p_id);
+  delete from sejours where client_id = p_id;
+  delete from clients where id = p_id;
+end;
+$$;
+
+-- 8. Droits d'exécution
 grant usage on schema public to anon, authenticated, service_role;
 grant select on all tables in schema public to authenticated;
 grant execute on all functions in schema public to authenticated, service_role;

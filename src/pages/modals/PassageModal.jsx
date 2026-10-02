@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { Clock, Fan, Snowflake } from "lucide-react";
+import { Clock, Fan, Save, Snowflake } from "lucide-react";
 import Modal from "../../components/ui/Modal.jsx";
 import { Field, Input, Select } from "../../components/ui/Field.jsx";
 import Button from "../../components/ui/Button.jsx";
@@ -13,39 +13,78 @@ import {
   fmtFCFA,
   todayStr,
   nowTime,
+  fmtTime,
   addHoursToDateTime,
   fmtDate,
 } from "../../lib/format.js";
 
 const QUICK_HOURS = [1, 2, 3, 4, 5, 6];
 
-export default function PassageModal({ room, rooms, onClose, onSubmit, submitting }) {
+export default function PassageModal({
+  room,
+  passage,
+  rooms,
+  onClose,
+  onSubmit,
+  submitting,
+}) {
+  const isEdit = Boolean(passage);
+
   const availableRooms = useMemo(
-    () => (rooms || []).filter((r) => r.statut === "libre" || r.id === room?.id),
-    [rooms, room]
+    () =>
+      (rooms || []).filter(
+        (r) =>
+          r.statut === "libre" ||
+          r.id === room?.id ||
+          Number(r.id) === Number(passage?.chambre_id)
+      ),
+    [rooms, room, passage]
   );
 
-  const initialRoom = room || availableRooms[0] || null;
-  const initialClim = getRoomClimatisation(initialRoom);
+  const initialRoom =
+    (passage
+      ? (rooms || []).find((r) => Number(r.id) === Number(passage.chambre_id))
+      : room) ||
+    availableRooms[0] ||
+    null;
+
+  const initialClim = passage?.type_climatisation
+    ? passage.type_climatisation
+    : getRoomClimatisation(initialRoom);
   const initialTarif = PASSAGE_TARIFS[initialClim]?.prix_heure || 2500;
+  const initialDuree = Number(passage?.duree_heures) || 1;
   const today = todayStr();
   const currentTime = nowTime();
 
   const [form, setForm] = useState({
-    chambre_id: initialRoom?.id || "",
+    chambre_id: passage?.chambre_id || initialRoom?.id || "",
     type_climatisation: initialClim,
-    duree_heures: 1,
-    date_entree: today,
-    heure_entree: currentTime,
-    nb_personnes: 2,
-    nom: "",
-    prenoms: "",
-    telephone: "",
+    duree_heures: initialDuree,
+    date_entree: passage?.date_entree || today,
+    heure_entree: fmtTime(passage?.heure_entree) || currentTime,
+    nb_personnes: passage?.nb_personnes || 2,
+    nom:
+      passage?.client_nom && passage.client_nom !== "Client"
+        ? passage.client_nom
+        : "",
+    prenoms:
+      passage?.client_prenoms && passage.client_prenoms !== "de passage"
+        ? passage.client_prenoms
+        : "",
+    telephone:
+      passage?.client_telephone && passage.client_telephone !== "-"
+        ? passage.client_telephone
+        : "",
     type_piece: "CNI",
     numero_piece: "",
     mode_paiement: "Espèces",
-    montant_paye: initialTarif,
-    customPaye: false,
+    montant_paye:
+      passage?.montant_paye !== undefined
+        ? Number(passage.montant_paye)
+        : initialDuree * initialTarif,
+    customPaye:
+      isEdit &&
+      Number(passage?.montant_paye) !== Number(passage?.montant_total),
   });
 
   const selectedRoom = useMemo(
@@ -76,7 +115,9 @@ export default function PassageModal({ room, rooms, onClose, onSubmit, submittin
       ...f,
       chambre_id: newId,
       type_climatisation: clim,
-      montant_paye: f.customPaye ? f.montant_paye : Math.max(1, Number(f.duree_heures) || 1) * newTarif,
+      montant_paye: f.customPaye
+        ? f.montant_paye
+        : Math.max(1, Number(f.duree_heures) || 1) * newTarif,
     }));
   };
 
@@ -85,7 +126,9 @@ export default function PassageModal({ room, rooms, onClose, onSubmit, submittin
     setForm((f) => ({
       ...f,
       type_climatisation: clim,
-      montant_paye: f.customPaye ? f.montant_paye : Math.max(1, Number(f.duree_heures) || 1) * newTarif,
+      montant_paye: f.customPaye
+        ? f.montant_paye
+        : Math.max(1, Number(f.duree_heures) || 1) * newTarif,
     }));
   };
 
@@ -100,7 +143,8 @@ export default function PassageModal({ room, rooms, onClose, onSubmit, submittin
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
-  const valid = Boolean(form.chambre_id) && dureeHeures >= 1 && montantPaye >= 0;
+  const valid =
+    Boolean(form.chambre_id) && dureeHeures >= 1 && montantPaye >= 0;
 
   const submit = () => {
     if (!valid) return;
@@ -129,7 +173,13 @@ export default function PassageModal({ room, rooms, onClose, onSubmit, submittin
 
   return (
     <Modal
-      title={`Nouveau passage${selectedRoom ? ` — Chambre ${selectedRoom.numero}` : ""}`}
+      title={
+        isEdit
+          ? `Modifier le passage ${passage.numero}`
+          : `Nouveau passage${
+              selectedRoom ? ` — Chambre ${selectedRoom.numero}` : ""
+            }`
+      }
       subtitle="Tarification à l'heure : 2 000 FCFA/h (ventilée) · 2 500 FCFA/h (climatisée)."
       onClose={onClose}
       wide
@@ -138,8 +188,15 @@ export default function PassageModal({ room, rooms, onClose, onSubmit, submittin
           <Button variant="subtle" onClick={onClose}>
             Annuler
           </Button>
-          <Button icon={Clock} loading={submitting} disabled={!valid} onClick={submit}>
-            Démarrer le passage ({fmtFCFA(montantTotal)})
+          <Button
+            icon={isEdit ? Save : Clock}
+            loading={submitting}
+            disabled={!valid}
+            onClick={submit}
+          >
+            {isEdit
+              ? `Enregistrer (${fmtFCFA(montantTotal)})`
+              : `Démarrer le passage (${fmtFCFA(montantTotal)})`}
           </Button>
         </>
       }
@@ -153,10 +210,12 @@ export default function PassageModal({ room, rooms, onClose, onSubmit, submittin
       >
         {/* 1. Choix de la chambre & tarif horaire */}
         <fieldset className="flex flex-col gap-3">
-          <legend className="section-title mb-1">Chambre & Tarification horaire</legend>
+          <legend className="section-title mb-1">
+            Chambre & Tarification horaire
+          </legend>
 
           <div className="grid sm:grid-cols-2 gap-3">
-            <Field label="Chambre disponible" required>
+            <Field label="Chambre" required>
               <Select value={form.chambre_id} onChange={handleRoomChange}>
                 {availableRooms.length === 0 && (
                   <option value="">Aucune chambre libre</option>
@@ -166,7 +225,8 @@ export default function PassageModal({ room, rooms, onClose, onSubmit, submittin
                   const t = PASSAGE_TARIFS[c];
                   return (
                     <option key={r.id} value={r.id}>
-                      Chambre {r.numero} — {r.type} ({t.shortLabel} · {fmtFCFA(t.prix_heure)}/h)
+                      Chambre {r.numero} — {r.type} ({t.shortLabel} ·{" "}
+                      {fmtFCFA(t.prix_heure)}/h)
                     </option>
                   );
                 })}
@@ -258,7 +318,11 @@ export default function PassageModal({ room, rooms, onClose, onSubmit, submittin
               />
             </Field>
             <Field label="Heure d'entrée">
-              <Input type="time" value={form.heure_entree} onChange={set("heure_entree")} />
+              <Input
+                type="time"
+                value={form.heure_entree}
+                onChange={set("heure_entree")}
+              />
             </Field>
             <Field label="Sortie prévue (calculée)">
               <div className="input flex items-center justify-between bg-stone-50 dark:bg-brand-900/60 font-semibold">
@@ -271,19 +335,37 @@ export default function PassageModal({ room, rooms, onClose, onSubmit, submittin
           </div>
         </fieldset>
 
-        {/* 3. Client (optionnel pour passage rapide) */}
+        {/* 3. Client */}
         <fieldset className="grid sm:grid-cols-2 gap-3">
           <legend className="section-title mb-1">
-            Client <span className="text-xs font-normal text-stone-400">(facultatif pour un passage)</span>
+            Client{" "}
+            <span className="text-xs font-normal text-stone-400">
+              (facultatif pour un passage)
+            </span>
           </legend>
           <Field label="Nom" hint="« Client de passage » si laissé vide">
-            <Input value={form.nom} onChange={set("nom")} placeholder="Client" autoComplete="off" />
+            <Input
+              value={form.nom}
+              onChange={set("nom")}
+              placeholder="Client"
+              autoComplete="off"
+            />
           </Field>
           <Field label="Prénoms">
-            <Input value={form.prenoms} onChange={set("prenoms")} placeholder="de passage" autoComplete="off" />
+            <Input
+              value={form.prenoms}
+              onChange={set("prenoms")}
+              placeholder="de passage"
+              autoComplete="off"
+            />
           </Field>
           <Field label="Téléphone">
-            <Input value={form.telephone} onChange={set("telephone")} inputMode="tel" placeholder="+225…" />
+            <Input
+              value={form.telephone}
+              onChange={set("telephone")}
+              inputMode="tel"
+              placeholder="+225…"
+            />
           </Field>
           <div className="grid grid-cols-2 gap-2">
             <Field label="Pièce">
@@ -296,7 +378,11 @@ export default function PassageModal({ room, rooms, onClose, onSubmit, submittin
               </Select>
             </Field>
             <Field label="N° Pièce">
-              <Input value={form.numero_piece} onChange={set("numero_piece")} placeholder="Optionnel" />
+              <Input
+                value={form.numero_piece}
+                onChange={set("numero_piece")}
+                placeholder="Optionnel"
+              />
             </Field>
           </div>
         </fieldset>
@@ -304,7 +390,7 @@ export default function PassageModal({ room, rooms, onClose, onSubmit, submittin
         {/* 4. Paiement */}
         <fieldset className="grid sm:grid-cols-2 gap-3">
           <legend className="section-title mb-1">Encaissement</legend>
-          <Field label="Montant encaissé maintenant (FCFA)">
+          <Field label="Montant encaissé (FCFA)">
             <Input
               type="number"
               min={0}
@@ -334,13 +420,18 @@ export default function PassageModal({ room, rooms, onClose, onSubmit, submittin
             Type de chambre
           </span>
           <span className="text-right font-medium">
-            {PASSAGE_TARIFS[form.type_climatisation]?.label} ({fmtFCFA(tarifHoraire)}/h)
+            {PASSAGE_TARIFS[form.type_climatisation]?.label} (
+            {fmtFCFA(tarifHoraire)}/h)
           </span>
           <span className="text-stone-600 dark:text-stone-300">
             Durée : {dureeHeures} heure(s) × {fmtFCFA(tarifHoraire)}
           </span>
-          <span className="text-right font-semibold">{fmtFCFA(montantTotal)}</span>
-          <span className="text-stone-600 dark:text-stone-300">Encaissé maintenant</span>
+          <span className="text-right font-semibold">
+            {fmtFCFA(montantTotal)}
+          </span>
+          <span className="text-stone-600 dark:text-stone-300">
+            Montant payé
+          </span>
           <span className="text-right text-emerald-700 dark:text-emerald-300 font-medium">
             {fmtFCFA(montantPaye)}
           </span>

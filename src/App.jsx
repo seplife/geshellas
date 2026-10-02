@@ -27,6 +27,7 @@ import ReservationModal from "./pages/modals/ReservationModal.jsx";
 import NewUserModal from "./pages/modals/NewUserModal.jsx";
 import RoomFormModal from "./pages/modals/RoomFormModal.jsx";
 import ClientDetailModal from "./pages/modals/ClientDetailModal.jsx";
+import ClientFormModal from "./pages/modals/ClientFormModal.jsx";
 
 import { NAV_BY_ROLE, NAV_ITEMS } from "./constants.js";
 import { todayStr } from "./lib/format.js";
@@ -40,11 +41,13 @@ import {
   updateRoom,
   deleteRoom,
 } from "./services/rooms.js";
-import { listClients } from "./services/clients.js";
+import { listClients, updateClient, deleteClient } from "./services/clients.js";
 import {
   listStays,
   listPassages,
   createPassage,
+  updatePassage,
+  deletePassage,
   extendPassage,
   checkIn,
   checkOut,
@@ -216,6 +219,24 @@ export default function App() {
   const confirm = (title, message, action, successMsg, opts = {}) =>
     setModal({ type: "confirm", title, message, action, successMsg, ...opts });
 
+  const handleDeletePassage = (p) =>
+    confirm(
+      `Supprimer le passage ${p.numero} ?`,
+      `Le passage ${p.numero} (chambre ${p.chambre_numero}) ainsi que son encaissement associé seront définitivement supprimés.`,
+      () => deletePassage(p.id),
+      `Passage ${p.numero} supprimé.`,
+      { danger: true, confirmLabel: "Supprimer le passage" }
+    );
+
+  const handleDeleteClient = (c) =>
+    confirm(
+      `Supprimer le client ${c.nom} ${c.prenoms} ?`,
+      `La fiche de ${c.nom} ${c.prenoms} et son historique associé seront définitivement supprimés.`,
+      () => deleteClient(c.id),
+      `Client ${c.nom} ${c.prenoms} supprimé.`,
+      { danger: true, confirmLabel: "Supprimer le client" }
+    );
+
   const dashboard = data.dashboard;
   const activePassagesCount = (data.passages || []).filter(
     (p) => p.statut === "en_cours"
@@ -315,6 +336,8 @@ export default function App() {
               onRetry={() => reloadTab("passages")}
               role={role}
               onNewPassage={(room) => setModal({ type: "passage", room })}
+              onEditPassage={(passage) => setModal({ type: "passage", passage })}
+              onDeletePassage={handleDeletePassage}
               onExtendPassage={(stay) => setModal({ type: "extend-passage", stay })}
               onPayPassage={(stay) => setModal({ type: "pay", stay })}
               onCheckOutPassage={(stay) => setModal({ type: "checkout", stay })}
@@ -355,12 +378,15 @@ export default function App() {
               clients={data.clients}
               error={errors.clients}
               onRetry={() => load("clients")}
+              role={role}
               initialQuery={params.current.clients}
               onSearch={(q) => {
                 params.current.clients = q;
                 load("clients");
               }}
               onOpen={(c) => setModal({ type: "client", client: c })}
+              onEdit={(c) => setModal({ type: "client-form", client: c })}
+              onDelete={handleDeleteClient}
             />
           )}
           {tab === "payments" && canSee("payments") && (
@@ -457,17 +483,23 @@ export default function App() {
       {modal?.type === "passage" && (
         <PassageModal
           room={modal.room}
+          passage={modal.passage}
           rooms={data.rooms || []}
           submitting={submitting}
           onClose={closeModal}
           onSubmit={(payload) =>
             runAction(
-              () => createPassage(payload),
-              `Passage enregistré (${payload.duree_heures}h — ${
-                payload.type_climatisation === "ventilee"
-                  ? "Chambre ventilée 2 000 FCFA/h"
-                  : "Chambre climatisée 2 500 FCFA/h"
-              }).`
+              () =>
+                modal.passage
+                  ? updatePassage(modal.passage.id, payload)
+                  : createPassage(payload),
+              modal.passage
+                ? `Passage ${modal.passage.numero} mis à jour.`
+                : `Passage enregistré (${payload.duree_heures}h — ${
+                    payload.type_climatisation === "ventilee"
+                      ? "Chambre ventilée 2 000 FCFA/h"
+                      : "Chambre climatisée 2 500 FCFA/h"
+                  }).`
             )
           }
         />
@@ -564,7 +596,25 @@ export default function App() {
         />
       )}
       {modal?.type === "client" && (
-        <ClientDetailModal client={modal.client} onClose={closeModal} />
+        <ClientDetailModal
+          client={modal.client}
+          onClose={closeModal}
+          onEdit={(c) => setModal({ type: "client-form", client: c })}
+          onDelete={handleDeleteClient}
+        />
+      )}
+      {modal?.type === "client-form" && (
+        <ClientFormModal
+          client={modal.client}
+          submitting={submitting}
+          onClose={closeModal}
+          onSubmit={(values) =>
+            runAction(
+              () => updateClient(modal.client.id, values),
+              "Fiche client mise à jour."
+            )
+          }
+        />
       )}
       {modal?.type === "confirm" && (
         <ConfirmModal
